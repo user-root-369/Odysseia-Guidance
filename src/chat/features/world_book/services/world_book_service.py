@@ -6,7 +6,7 @@ import os
 import asyncio
 
 # 导入新的服务依赖
-from src.chat.services.gemini_service import GeminiService, gemini_service
+from src.chat.services.ai import gemini_service
 from src import config
 from src.chat.config import chat_config
 from src.chat.features.world_book.services.incremental_rag_service import (
@@ -25,7 +25,7 @@ class WorldBookService:
     同时支持通过 Discord ID 直接从 SQLite 数据库查找用户档案。
     """
 
-    def __init__(self, gemini_svc: GeminiService):
+    def __init__(self, gemini_svc):
         self.gemini_service = gemini_svc
         log.info("WorldBookService (ParadeDB Hybrid Search version) 初始化完成。")
 

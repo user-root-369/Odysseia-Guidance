@@ -66,7 +66,7 @@ class ApiEmbeddingService:
     def _get_gemini_service(self):
         """延迟导入 Gemini 服务以避免循环导入"""
         if self._gemini_service is None:
-            from src.chat.services.gemini_service import gemini_service
+            from src.chat.services.ai import gemini_service
 
             self._gemini_service = gemini_service
         return self._gemini_service

@@ -8,7 +8,7 @@ import json
 import os
 
 from src import config
-from src.chat.services.gemini_service import gemini_service
+from src.chat.services.ai import gemini_service
 from src.chat.config.thread_prompts import get_random_praise_prompt
 from src.chat.config.prompts import (
     PROMPT_CONFIG,
@@ -105,11 +105,11 @@ class ThreadCommentorService:
             # 1. 获取帖子的初始消息
             # 注意：thread.starter_message 可能返回缓存中不完整的消息对象
             # 始终使用 fetch_message 来获取完整内容
-            log.info(f"[暖贴调试] 尝试获取帖子初始消息...")
+            log.info("[暖贴调试] 尝试获取帖子初始消息...")
             try:
                 # 使用 thread.id 作为起始消息的 ID
                 first_message = await thread.fetch_message(thread.id)
-                log.info(f"[暖贴调试] 从 fetch_message 获取成功")
+                log.info("[暖贴调试] 从 fetch_message 获取成功")
             except discord.NotFound:
                 log.warning(f"[暖贴调试] 无法找到帖子 {thread.id} 的初始消息")
                 first_message = None

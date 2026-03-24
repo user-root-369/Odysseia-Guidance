@@ -9,10 +9,9 @@ from src.chat.config.chat_config import (
     PROMPT_CONFIG,
     SUMMARY_MODEL,
     GEMINI_SUMMARY_GEN_CONFIG,
-    PERSONAL_MEMORY_CONFIG,
     CONVERSATION_MEMORY_CONFIG,
 )
-from src.chat.services.gemini_service import gemini_service
+from src.chat.services.ai import gemini_service
 from src.chat.features.personal_memory.services.conversation_block_service import (
     conversation_block_service,
 )

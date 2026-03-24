@@ -56,7 +56,7 @@ async def get_yearly_summary(**kwargs) -> Dict[str, Any]:
     log.info(f"--- [工具执行]: get_yearly_summary, user_id={user_id}, year={year} ---")
 
     # 延迟导入以避免循环依赖
-    from src.chat.services.gemini_service import gemini_service
+    from src.chat.services.ai import gemini_service
 
     # 1. 检查用户是否已经生成过当年的总结
     # 1. 检查用户生成次数是否已达上限

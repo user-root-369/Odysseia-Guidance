@@ -7,7 +7,7 @@ from discord.ext import commands
 from src.chat.features.affection.service.affection_service import AffectionService
 from src.chat.features.affection.service.feeding_service import feeding_service
 from src.chat.features.odysseia_coin.service.coin_service import CoinService
-from src.chat.services.gemini_service import gemini_service
+from src.chat.services.ai import gemini_service
 from src.chat.services.prompt_service import prompt_service
 from src.chat.services.event_service import event_service
 from src.chat.config.chat_config import FEEDING_CONFIG, PROMPT_CONFIG

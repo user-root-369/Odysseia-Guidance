@@ -11,7 +11,7 @@ from src.chat.config.chat_config import (
 from src.chat.config import chat_config
 from src.chat.features.affection.service.affection_service import AffectionService
 from src.chat.features.affection.service.confession_service import ConfessionService
-from src.chat.services.gemini_service import gemini_service
+from src.chat.services.ai import gemini_service
 from src.chat.services.prompt_service import prompt_service
 from src.chat.utils.prompt_utils import replace_emojis
 from src.config import DEVELOPER_USER_IDS

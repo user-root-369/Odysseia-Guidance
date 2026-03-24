@@ -1,5 +1,5 @@
 import logging
-from src.chat.services.gemini_service import GeminiService
+from src.chat.services.ai import gemini_service
 from src.chat.features.affection.service.affection_service import AffectionService
 from src.chat.utils.prompt_utils import extract_persona_prompt
 from src.chat.config.prompts import SYSTEM_PROMPT
@@ -9,9 +9,7 @@ log = logging.getLogger(__name__)
 
 
 class GiftService:
-    def __init__(
-        self, gemini_service: GeminiService, affection_service: AffectionService
-    ):
+    def __init__(self, gemini_svc, affection_service: AffectionService):
         self.gemini_service = gemini_service
         self.affection_service = affection_service
 
@@ -48,4 +46,4 @@ class GiftService:
 
         log.info(f"为礼物 {item_name} 生成AI回应的返回结果: {response_text}")
 
-        return response_text
+        return response_text or ""

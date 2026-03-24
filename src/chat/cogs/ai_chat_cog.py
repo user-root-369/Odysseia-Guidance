@@ -10,7 +10,7 @@ import io
 # 导入新的 Service
 from src.chat.services.chat_service import chat_service
 from src.chat.services.message_processor import message_processor
-from src.chat.services.gemini_service import gemini_service
+from src.chat.services.ai import gemini_service
 from src.chat.features.tools.functions.summarize_channel import text_to_summary_image
 
 

@@ -30,8 +30,8 @@ from src.chat.features.world_book.database.world_book_db_manager import (
 # 添加到全局的 tool_registry 中。
 # 动态加载器会自动处理工具的加载，此处不再需要手动导入。
 
-# 导入全局 gemini_service 实例
-from src.chat.services.gemini_service import gemini_service
+# 导入全局 ai_service 实例（兼容层，提供与旧 gemini_service 相同的接口）
+from src.chat.services.ai import gemini_service, ai_service
 from src.chat.services.review_service import initialize_review_service
 from src.chat.features.work_game.services.work_db_service import WorkDBService
 from src.chat.utils.command_sync import sync_commands
