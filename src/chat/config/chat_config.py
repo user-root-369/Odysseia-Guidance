@@ -345,7 +345,7 @@ PERSONAL_MEMORY_CONFIG = {
 CONVERSATION_MEMORY_CONFIG = {
     "enabled": True,  # 是否启用对话记忆功能
     "block_size": 10,  # 每个对话块包含的消息数量
-    "retrieval_top_k": 3,  # 检索返回的对话块数量
+    "retrieval_top_k": 1,  # 检索返回的对话块数量
     "max_blocks_per_user": 100,  # 每个用户最多保留的对话块数量
     "show_time_marker": True,  # 是否在对话块前显示时间标记
     # 混合搜索配置 (参考论坛搜索)
