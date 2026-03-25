@@ -11,7 +11,8 @@ from src.chat.config.chat_config import (
     GEMINI_SUMMARY_GEN_CONFIG,
     CONVERSATION_MEMORY_CONFIG,
 )
-from src.chat.services.ai import gemini_service
+from src.chat.services.ai.service import ai_service
+from src.chat.services.ai.providers.base import GenerationConfig
 from src.chat.features.personal_memory.services.conversation_block_service import (
     conversation_block_service,
 )
@@ -109,7 +110,12 @@ class PersonalMemoryService:
             return False
 
     async def update_and_conditionally_summarize_memory(
-        self, user_id: int, user_name: str, user_content: str, ai_response: str
+        self,
+        user_id: int,
+        user_name: str,
+        user_content: str,
+        ai_response: str,
+        current_model: str | None = None,
     ):
         """
         核心入口：更新对话历史和计数，并在达到阈值时触发总结。
@@ -119,6 +125,13 @@ class PersonalMemoryService:
         - 记录对话时添加时间戳
         - 在达到 block_size 阈值时创建对话块（永久记忆）
         - 方案E：每2个新对话块触发一次印象总结
+
+        Args:
+            user_id: 用户ID
+            user_name: 用户名
+            user_content: 用户消息内容
+            ai_response: AI回复内容
+            current_model: 当前使用的模型名称（用于总结时跟随主模型）
         """
         async with AsyncSessionLocal() as session:
             async with session.begin():
@@ -154,9 +167,11 @@ class PersonalMemoryService:
         # 在AI回复前执行，确保最新对话可被RAG检索
 
         # 方案E：检查是否有足够的未总结对话块
-        await self._check_and_summarize_blocks(user_id)
+        await self._check_and_summarize_blocks(user_id, current_model)
 
-    async def _check_and_summarize_blocks(self, user_id: int):
+    async def _check_and_summarize_blocks(
+        self, user_id: int, current_model: str | None = None
+    ):
         """
         方案E：检查是否有足够的未总结对话块，如果有2个则触发印象总结。
 
@@ -175,9 +190,14 @@ class PersonalMemoryService:
             f"开始生成印象总结。"
         )
 
-        await self._summarize_blocks(user_id, blocks_to_summarize)
+        await self._summarize_blocks(user_id, blocks_to_summarize, current_model)
 
-    async def _summarize_blocks(self, user_id: int, blocks: List[ConversationBlock]):
+    async def _summarize_blocks(
+        self,
+        user_id: int,
+        blocks: List[ConversationBlock],
+        current_model: str | None = None,
+    ):
         """
         方案E：从对话块生成印象总结。
 
@@ -229,11 +249,20 @@ class PersonalMemoryService:
         log.info(f"对话块 ID: {[b.id for b in blocks]}")
         # --- [MEMORY DEBUGGER] ---
 
-        new_summary = await gemini_service.generate_simple_response(
-            prompt=final_prompt,
-            generation_config=GEMINI_SUMMARY_GEN_CONFIG,
-            model_name=SUMMARY_MODEL,
+        # 使用 ai_service.generate() 方法
+        # 如果传入了 current_model，使用它；否则回退到 SUMMARY_MODEL
+        model_to_use = current_model if current_model else SUMMARY_MODEL
+        log.info(f"使用模型 {model_to_use} 进行印象总结")
+
+        messages = [{"role": "user", "content": final_prompt}]
+        config = GenerationConfig(
+            temperature=GEMINI_SUMMARY_GEN_CONFIG.get("temperature", 0.7),
+            max_output_tokens=GEMINI_SUMMARY_GEN_CONFIG.get("max_output_tokens", 2048),
         )
+        result = await ai_service.generate(
+            messages=messages, config=config, model=model_to_use
+        )
+        new_summary = result.content
 
         # 保存新摘要并标记对话块为已总结
         if new_summary:
@@ -264,7 +293,9 @@ class PersonalMemoryService:
         else:
             log.error(f"为用户 {user_id} 生成记忆摘要失败，AI 返回空。")
 
-    async def _summarize_memory(self, user_id: int, conversation_history: list):
+    async def _summarize_memory(
+        self, user_id: int, conversation_history: list, current_model: str | None = None
+    ):
         """私有方法：获取历史，生成摘要，并清空计数和历史。"""
         log.info(f"开始为用户 {user_id} 生成记忆摘要。")
 
@@ -307,11 +338,20 @@ class PersonalMemoryService:
         log.info(f"用于总结的对话历史:\n{dialogue_text}")
         # --- [MEMORY DEBUGGER] ---
 
-        new_summary = await gemini_service.generate_simple_response(
-            prompt=final_prompt,
-            generation_config=GEMINI_SUMMARY_GEN_CONFIG,
-            model_name=SUMMARY_MODEL,
+        # 使用 ai_service.generate() 方法
+        # 如果传入了 current_model，使用它；否则回退到 SUMMARY_MODEL
+        model_to_use = current_model if current_model else SUMMARY_MODEL
+        log.info(f"使用模型 {model_to_use} 进行记忆摘要")
+
+        messages = [{"role": "user", "content": final_prompt}]
+        config = GenerationConfig(
+            temperature=GEMINI_SUMMARY_GEN_CONFIG.get("temperature", 0.7),
+            max_output_tokens=GEMINI_SUMMARY_GEN_CONFIG.get("max_output_tokens", 2048),
         )
+        result = await ai_service.generate(
+            messages=messages, config=config, model=model_to_use
+        )
+        new_summary = result.content
 
         # 4. 将新摘要保存到数据库
         if new_summary:

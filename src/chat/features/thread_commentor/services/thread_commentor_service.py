@@ -8,7 +8,8 @@ import json
 import os
 
 from src import config
-from src.chat.services.ai import gemini_service
+from src.chat.services.ai.service import ai_service
+from src.chat.services.ai.providers.base import GenerationConfig
 from src.chat.config.thread_prompts import get_random_praise_prompt
 from src.chat.config.prompts import (
     PROMPT_CONFIG,
@@ -254,10 +255,12 @@ class ThreadCommentorService:
                 {"role": "user", "parts": [thread_full_content]}
             )
 
-            # 7. 调用重构后的 Gemini 服务方法
-            praise_text = await gemini_service.generate_thread_praise(
-                conversation_history=conversation_history
+            # 7. 调用 AIService 生成评价
+            config = GenerationConfig(temperature=1.0, max_output_tokens=1024)
+            result = await ai_service.generate(
+                messages=conversation_history, config=config
             )
+            praise_text = result.content
 
             if praise_text:
                 # 使用 prompt_utils 中的函数来处理表情符号

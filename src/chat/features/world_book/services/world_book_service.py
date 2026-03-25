@@ -6,7 +6,7 @@ import os
 import asyncio
 
 # 导入新的服务依赖
-from src.chat.services.ai import gemini_service
+from src.chat.services.ai.service import ai_service
 from src import config
 from src.chat.config import chat_config
 from src.chat.features.world_book.services.incremental_rag_service import (
@@ -25,19 +25,19 @@ class WorldBookService:
     同时支持通过 Discord ID 直接从 SQLite 数据库查找用户档案。
     """
 
-    def __init__(self, gemini_svc):
-        self.gemini_service = gemini_svc
+    def __init__(self, ai_svc):
+        self.ai_service = ai_svc
         log.info("WorldBookService (ParadeDB Hybrid Search version) 初始化完成。")
 
     def is_ready(self) -> bool:
         """检查服务是否已准备好（所有依赖项都可用）。"""
-        # 本地向量模式不需要 gemini_service
+        # 本地向量模式不需要 ai_service
         from src.chat.services.embedding_factory import is_vector_enabled
 
         if chat_config.VECTOR_MODE == "local":
             return is_vector_enabled()
-        # API 向量模式需要 gemini_service
-        return self.gemini_service.is_available()
+        # API 向量模式需要 ai_service
+        return self.ai_service.is_available()
 
     async def find_entries(
         self,
@@ -292,4 +292,4 @@ class WorldBookService:
 
 
 # 使用已导入的全局服务实例来创建 WorldBookService 的单例
-world_book_service = WorldBookService(gemini_service)
+world_book_service = WorldBookService(ai_service)

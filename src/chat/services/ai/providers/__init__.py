@@ -18,6 +18,7 @@ from .base import (
 from .gemini_provider import GeminiProvider, GeminiCustomProvider
 from .deepseek_provider import DeepSeekProvider
 from .openai_provider import OpenAICompatibleProvider
+from .provider_format import ProviderFormat, MessageFormat
 
 __all__ = [
     # 基类
@@ -37,4 +38,7 @@ __all__ = [
     "GeminiCustomProvider",
     "DeepSeekProvider",
     "OpenAICompatibleProvider",
+    # 格式常量
+    "ProviderFormat",
+    "MessageFormat",
 ]

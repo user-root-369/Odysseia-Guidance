@@ -14,6 +14,7 @@ from google.genai import types as genai_types
 
 # 导入通用工具声明
 from src.chat.features.tools.tool_declaration import ToolDeclaration
+from src.chat.services.ai.providers.provider_format import ProviderFormat
 
 log = logging.getLogger(__name__)
 
@@ -122,6 +123,9 @@ class ToolConverter:
         """
         将 ToolDeclaration 转换为 OpenAI Tool 格式
 
+        注意：工具格式应该在 ToolService 层根据 provider_type 处理好。
+        此方法主要用于向后兼容或特殊情况。
+
         Args:
             declaration: 通用工具声明
 
@@ -134,6 +138,9 @@ class ToolConverter:
     def to_openai_tools(declarations: List[ToolDeclaration]) -> List[Dict[str, Any]]:
         """
         批量转换为 OpenAI Tool 格式
+
+        注意：工具格式应该在 ToolService 层根据 provider_type 处理好。
+        此方法主要用于向后兼容或特殊情况。
 
         Args:
             declarations: 通用工具声明列表
@@ -199,6 +206,52 @@ class ToolConverter:
         )
 
     @staticmethod
+    def _serialize_for_json(obj: Any) -> Any:
+        """
+        递归转换对象为 JSON 可序列化格式
+
+        处理 Gemini Part 对象等特殊类型
+        """
+        if obj is None:
+            return None
+        elif isinstance(obj, str | int | float | bool):
+            return obj
+        elif isinstance(obj, genai_types.Part):
+            # Gemini Part 对象转换为文本
+            if hasattr(obj, "text") and obj.text:
+                return obj.text
+            elif hasattr(obj, "function_response"):
+                return {
+                    "function_response": {
+                        "name": getattr(obj.function_response, "name", ""),
+                        "response": dict(
+                            getattr(obj.function_response, "response", {})
+                        ),
+                    }
+                }
+            elif hasattr(obj, "function_call"):
+                return {
+                    "function_call": {
+                        "name": getattr(obj.function_call, "name", ""),
+                        "args": dict(getattr(obj.function_call, "args", {})),
+                    }
+                }
+            return str(obj)
+        elif isinstance(obj, dict):
+            return {k: ToolConverter._serialize_for_json(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [ToolConverter._serialize_for_json(item) for item in obj]
+        elif hasattr(obj, "__dict__"):
+            # 其他对象尝试转换为字典
+            return {
+                k: ToolConverter._serialize_for_json(v)
+                for k, v in vars(obj).items()
+                if not k.startswith("_")
+            }
+        else:
+            return str(obj)
+
+    @staticmethod
     def tool_result_to_openai_message(
         tool_call_id: str,
         tool_name: str,
@@ -219,10 +272,16 @@ class ToolConverter:
         """
         import json
 
+        # 先转换结果中的非 JSON 可序列化对象
+        serializable_result = ToolConverter._serialize_for_json(result)
+
         if is_error:
-            content = json.dumps({"error": result.get("error", "Unknown error")})
+            content = json.dumps(
+                {"error": serializable_result.get("error", "Unknown error")},
+                ensure_ascii=False,
+            )
         else:
-            content = json.dumps(result, ensure_ascii=False)
+            content = json.dumps(serializable_result, ensure_ascii=False)
 
         return {
             "role": "tool",
@@ -298,6 +357,90 @@ class ToolConverter:
 
         return function_calls
 
+    # ==================== Schema 格式转换 ====================
+
+    @staticmethod
+    def convert_schema_to_openai_format(schema: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        将 Gemini 格式的 Schema 转换为 OpenAI 兼容格式
+
+        主要转换：
+        - 类型名大写 -> 小写 (STRING -> string, OBJECT -> object)
+        - any_of -> anyOf
+        - 移除 Gemini 特有字段
+
+        Args:
+            schema: Gemini 格式的 Schema
+
+        Returns:
+            Dict: OpenAI 兼容格式的 Schema
+        """
+        if not isinstance(schema, dict):
+            return schema
+
+        result = {}
+
+        # 类型名映射（大写 -> 小写）
+        type_map = {
+            "STRING": "string",
+            "INTEGER": "integer",
+            "NUMBER": "number",
+            "BOOLEAN": "boolean",
+            "ARRAY": "array",
+            "OBJECT": "object",
+        }
+
+        # 转换 type 字段
+        if "type" in schema:
+            schema_type = schema["type"]
+            if isinstance(schema_type, str):
+                result["type"] = type_map.get(schema_type, schema_type.lower())
+            else:
+                result["type"] = schema_type
+
+        # 复制标准字段
+        for key in ["description", "default", "enum", "required", "nullable"]:
+            if key in schema:
+                result[key] = schema[key]
+
+        # 转换 any_of -> anyOf
+        if "any_of" in schema:
+            result["anyOf"] = [
+                ToolConverter.convert_schema_to_openai_format(item)
+                for item in schema["any_of"]
+            ]
+
+        # 处理 anyOf（已经是小写格式）
+        if "anyOf" in schema:
+            result["anyOf"] = [
+                ToolConverter.convert_schema_to_openai_format(item)
+                for item in schema["anyOf"]
+            ]
+
+        # 递归处理 properties
+        if "properties" in schema:
+            result["properties"] = {}
+            for key, value in schema["properties"].items():
+                result["properties"][key] = (
+                    ToolConverter.convert_schema_to_openai_format(value)
+                )
+
+        # 递归处理 items
+        if "items" in schema:
+            result["items"] = ToolConverter.convert_schema_to_openai_format(
+                schema["items"]
+            )
+
+        # 递归处理 additionalProperties
+        if "additionalProperties" in schema:
+            result["additionalProperties"] = (
+                ToolConverter.convert_schema_to_openai_format(
+                    schema["additionalProperties"]
+                )
+            )
+
+        return result
+
     # ==================== 通用转换方法 ====================
 
     @staticmethod
@@ -314,15 +457,13 @@ class ToolConverter:
         Returns:
             转换后的工具列表
         """
-        provider_type = provider_type.lower()
-
-        if provider_type in ["gemini", "gemini_official", "gemini_custom"]:
+        # 使用统一的 ProviderFormat 判断工具类型
+        if ProviderFormat.is_gemini_provider(provider_type.lower()):
             return ToolConverter.to_gemini_tools(declarations)
-        elif provider_type in ["openai", "openai_compatible", "deepseek"]:
-            return ToolConverter.to_openai_tools(declarations)
-        elif provider_type in ["claude"]:
+        elif provider_type.lower() in ["claude"]:
             return ToolConverter.to_claude_tools(declarations)
         else:
-            # 默认使用 OpenAI 格式
-            log.warning(f"未知的 Provider 类型 '{provider_type}'，使用 OpenAI 格式")
+            # OpenAI 兼容 Provider（包括 deepseek, openai_compatible）和未知类型
+            if not ProviderFormat.is_openai_compatible_provider(provider_type.lower()):
+                log.warning(f"未知的 Provider 类型 '{provider_type}'，使用 OpenAI 格式")
             return ToolConverter.to_openai_tools(declarations)

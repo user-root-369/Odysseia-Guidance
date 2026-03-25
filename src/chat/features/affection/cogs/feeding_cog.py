@@ -7,7 +7,8 @@ from discord.ext import commands
 from src.chat.features.affection.service.affection_service import AffectionService
 from src.chat.features.affection.service.feeding_service import feeding_service
 from src.chat.features.odysseia_coin.service.coin_service import CoinService
-from src.chat.services.ai import gemini_service
+from src.chat.services.ai.service import ai_service
+from src.chat.services.ai.providers.base import GenerationConfig
 from src.chat.services.prompt_service import prompt_service
 from src.chat.services.event_service import event_service
 from src.chat.config.chat_config import FEEDING_CONFIG, PROMPT_CONFIG
@@ -27,7 +28,7 @@ class FeedingCog(commands.Cog):
         self.bot = bot
         self.affection_service = AffectionService()
         self.coin_service = CoinService()
-        self.gemini_service = gemini_service  # 使用全局实例
+        self.ai_service = ai_service  # 使用全局实例
         self.feeding_service = feeding_service
 
     @app_commands.command(name="投喂", description="在吃饭?给类脑娘来一口怎么样")
@@ -69,9 +70,29 @@ class FeedingCog(commands.Cog):
             base_prompt = PROMPT_CONFIG.get("feeding_prompt", "")
             prompt = f"{persona_part}\n\n{base_prompt}"
 
-            response_text = await self.gemini_service.generate_text_with_image(
-                prompt=prompt, image_bytes=image_bytes, mime_type=image.content_type
-            )
+            # 构建 messages 格式（带图片）
+            # 注意：AIService 会自动检测 Provider 是否支持视觉
+            # 如果不支持，会使用 Ollama Vision 将图片转换为文字描述
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image",
+                            "image_bytes": image_bytes,
+                            "mime_type": image.content_type,
+                        },
+                    ],
+                }
+            ]
+
+            config = GenerationConfig(temperature=1.0, max_output_tokens=1024)
+
+            # 不传递自定义视觉提示词，让识图模型客观描述图片内容
+            # 这样可以正确处理搞怪图片等非食物内容
+            result = await ai_service.generate(messages=messages, config=config)
+            response_text = result.content
 
             if not response_text:
                 await interaction.edit_original_response(

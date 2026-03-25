@@ -13,7 +13,7 @@
 from google.genai import types
 import discord
 import inspect
-from typing import Optional, Dict, Callable, Any, List
+from typing import Optional, Dict, Callable, Any, List, Union
 from pydantic import BaseModel
 
 import logging
@@ -26,6 +26,7 @@ from src.chat.features.tools.services.global_tool_settings_service import (
 )
 from src.chat.features.tools.tool_declaration import ToolDeclaration
 from src.chat.features.tools.llm_adapters import to_gemini_tools
+from src.chat.services.ai.providers.provider_format import ProviderFormat
 
 log = logging.getLogger(__name__)
 
@@ -126,10 +127,12 @@ class ToolService:
         )
 
     async def get_dynamic_tools_for_context(
-        self, user_id_for_settings: Optional[str] = None
-    ) -> List[types.Tool]:
+        self,
+        user_id_for_settings: Optional[str] = None,
+        provider_type: Optional[str] = None,
+    ) -> List[Any]:
         """
-        根据提供的用户ID动态获取可用的工具列表（Gemini 格式）。
+        根据提供的用户ID和Provider类型动态获取可用的工具列表。
 
         过滤逻辑：
         1. 全局禁用的工具不会返回给 AI（节省 token，AI 完全看不到）
@@ -137,9 +140,12 @@ class ToolService:
 
         Args:
             user_id_for_settings: 用于查询工具设置的用户的ID。如果为 None，则返回默认工具。
+            provider_type: Provider 类型，用于决定返回的工具格式。
+                - "gemini_official" 或 "gemini_custom": 返回 Gemini 格式 (genai_types.Tool)
+                - 其他 (deepseek, openai_compatible 等): 返回 OpenAI 格式 (Dict)
 
         Returns:
-            Gemini 格式的工具列表（List[types.Tool]）。
+            根据provider类型返回对应格式的工具列表。
         """
         # 获取全局禁用的工具列表
         disabled_tools = await global_tool_settings_service.get_disabled_tools()
@@ -154,14 +160,19 @@ class ToolService:
                 f"全局禁用的工具: {disabled_tools}，过滤后剩余 {len(filtered_declarations)} 个工具"
             )
 
-        if not user_id_for_settings:
-            log.info("未提供 user_id_for_settings，使用默认工具集。")
+        # 根据 provider 类型选择返回格式（使用统一的格式判断工具）
+        if ProviderFormat.is_gemini_provider(provider_type or ""):
+            # Gemini Provider: 返回 genai_types.Tool 格式
+            log.info(
+                f"为 Gemini Provider 返回工具（共 {len(filtered_declarations)} 个）"
+            )
             return to_gemini_tools(filtered_declarations)
-
-        log.info(
-            f"为用户 {user_id_for_settings} 返回工具声明（共 {len(filtered_declarations)} 个）"
-        )
-        return to_gemini_tools(filtered_declarations)
+        else:
+            # 其他 Provider (DeepSeek, OpenAI 等): 返回 OpenAI 格式
+            log.info(
+                f"为 OpenAI 兼容 Provider 返回工具（共 {len(filtered_declarations)} 个）"
+            )
+            return [decl.to_openai_format() for decl in filtered_declarations]
 
     def get_tool_declarations(self) -> List[ToolDeclaration]:
         """
@@ -174,7 +185,7 @@ class ToolService:
 
     async def execute_tool_call(
         self,
-        tool_call: types.FunctionCall,
+        tool_call: Union[types.FunctionCall, Dict[str, Any]],
         channel: Optional[discord.TextChannel] = None,
         user_id: Optional[int] = None,
         log_detailed: bool = False,
@@ -185,7 +196,7 @@ class ToolService:
         这个版本通过依赖注入来提供上下文（如 bot 实例、channel），并处理备用参数（如 user_id）。
 
         Args:
-            tool_call: 来自 Gemini API 响应的函数调用对象。
+            tool_call: 来自 Gemini API 响应的函数调用对象，或 OpenAI 格式的 dict。
             channel: 可选的当前消息所在的 Discord 频道对象。
             user_id: 可选的当前消息作者的 Discord ID，用作某些参数的备用值。
             log_detailed: 是否记录详细日志。
@@ -194,7 +205,13 @@ class ToolService:
         Returns:
             一个格式化为 FunctionResponse 的 Part 对象，其中包含工具的输出。
         """
-        tool_name = tool_call.name
+        # 兼容 Gemini FunctionCall 对象和 OpenAI dict 格式
+        if isinstance(tool_call, dict):
+            tool_name = tool_call.get("name")
+            tool_args = tool_call.get("arguments", {})
+        else:
+            tool_name = tool_call.name
+            tool_args = dict(tool_call.args) if tool_call.args else {}
         if log_detailed:
             log.info(f"--- [工具执行流程]: 准备执行 '{tool_name}' ---")
 
@@ -259,12 +276,7 @@ class ToolService:
         # --- 结束检查 ---
 
         try:
-            # 步骤 1: 从模型响应中提取参数
-            tool_args: Dict[str, Any] = (
-                {key: value for key, value in tool_call.args.items()}
-                if tool_call.args
-                else {}
-            )
+            # 步骤 1: 从模型响应中提取参数（已在函数开头处理，这里使用 tool_args）
             if log_detailed:
                 log.info(f"模型提供的参数: {tool_args}")
 

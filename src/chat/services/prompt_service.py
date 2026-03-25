@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import logging
+import base64
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone, timedelta
 from PIL import Image
@@ -29,6 +30,43 @@ class PromptService:
         初始化 PromptService。
         """
         pass
+
+    @staticmethod
+    def _pil_image_to_base64(pil_image: Image.Image) -> tuple[str, str]:
+        """
+        将 PIL Image 转换为 base64 字符串
+
+        Args:
+            pil_image: PIL Image 对象
+
+        Returns:
+            tuple[str, str]: (base64 字符串, MIME 类型)
+        """
+        # 确定图片格式和 MIME 类型
+        img_format = pil_image.format or "PNG"
+        if img_format.upper() == "JPEG":
+            mime_type = "image/jpeg"
+        elif img_format.upper() == "GIF":
+            mime_type = "image/gif"
+        elif img_format.upper() == "WEBP":
+            mime_type = "image/webp"
+        else:
+            img_format = "PNG"
+            mime_type = "image/png"
+
+        # 转换为 base64
+        buffer = io.BytesIO()
+        # 如果图片有调色板或透明度，需要特殊处理
+        if pil_image.mode in ("P", "RGBA"):
+            if img_format == "JPEG":
+                pil_image = pil_image.convert("RGB")
+        elif pil_image.mode != "RGB" and img_format == "JPEG":
+            pil_image = pil_image.convert("RGB")
+
+        pil_image.save(buffer, format=img_format)
+        image_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+        return image_base64, mime_type
 
     def _get_model_specific_prompt(
         self, model_name: Optional[str], prompt_name: str
@@ -131,6 +169,7 @@ class PromptService:
         channel: Optional[Any] = None,  # 新增 channel 参数
         conversation_memory: Optional[str] = None,  # 第二层：对话记忆 RAG 内容
         latest_block: Optional[Dict[str, Any]] = None,  # 第三层：最新对话块
+        output_format: str = "gemini",  # "gemini" | "openai" - 输出格式
     ) -> List[Dict[str, Any]]:
         """
         构建用于AI聊天的分层对话历史。
@@ -568,7 +607,107 @@ class PromptService:
                 f"发送给AI的最终提示词: {json.dumps(final_conversation, ensure_ascii=False, indent=2)}"
             )
 
+        # 根据输出格式要求进行转换
+        if output_format == "openai":
+            final_conversation = self._convert_messages_to_openai_format(
+                final_conversation
+            )
+
         return final_conversation
+
+    def _convert_messages_to_openai_format(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        将消息列表转换为 OpenAI 兼容格式
+
+        处理 Gemini 格式 (parts) 到 OpenAI 格式 (content) 的转换：
+        - {"role": "user", "parts": ["text"]} -> {"role": "user", "content": "text"}
+        - {"role": "model", "parts": ["text"]} -> {"role": "assistant", "content": "text"}
+        - {"role": "user", "parts": ["text", PIL_Image]} -> {"role": "user", "content": [
+            {"type": "text", "text": "text"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
+          ]}
+
+        Args:
+            messages: 消息列表，可能是 Gemini 或 OpenAI 格式
+
+        Returns:
+            List[Dict]: OpenAI 兼容格式的消息列表
+        """
+        converted = []
+        for msg in messages:
+            role = msg.get("role", "")
+
+            # 处理 role 映射: model -> assistant
+            if role == "model":
+                role = "assistant"
+
+            # 提取 content
+            content = msg.get("content")
+            if content is None and "parts" in msg:
+                parts = msg["parts"]
+                if isinstance(parts, list):
+                    # 检查是否有 PIL Image 对象
+                    has_pil_image = any(isinstance(part, Image.Image) for part in parts)
+
+                    if has_pil_image:
+                        # 使用多模态格式
+                        content_parts = []
+                        for part in parts:
+                            if isinstance(part, str):
+                                content_parts.append({"type": "text", "text": part})
+                            elif isinstance(part, dict) and "text" in part:
+                                content_parts.append(
+                                    {"type": "text", "text": part["text"]}
+                                )
+                            elif isinstance(part, Image.Image):
+                                # 将 PIL Image 转换为 base64
+                                try:
+                                    image_base64, mime_type = self._pil_image_to_base64(
+                                        part
+                                    )
+                                    content_parts.append(
+                                        {
+                                            "type": "image_url",
+                                            "image_url": {
+                                                "url": f"data:{mime_type};base64,{image_base64}"
+                                            },
+                                        }
+                                    )
+                                    log.debug(
+                                        f"已将 PIL Image 转换为 base64，MIME 类型: {mime_type}"
+                                    )
+                                except Exception as e:
+                                    log.error(f"转换 PIL Image 到 base64 失败: {e}")
+                        content = content_parts
+                    else:
+                        # 纯文本格式，合并所有文本部分
+                        text_parts = []
+                        for part in parts:
+                            if isinstance(part, str):
+                                text_parts.append(part)
+                            elif isinstance(part, dict) and "text" in part:
+                                text_parts.append(part["text"])
+                        content = "\n".join(text_parts) if text_parts else ""
+                elif isinstance(parts, str):
+                    content = parts
+
+            # 确保有 content 字段
+            if content is None:
+                content = ""
+
+            # 构建转换后的消息
+            converted_msg = {"role": role, "content": content}
+
+            # 保留其他字段（如 tool_calls, tool_call_id, name 等）
+            for key in ["tool_calls", "tool_call_id", "name"]:
+                if key in msg:
+                    converted_msg[key] = msg[key]
+
+            converted.append(converted_msg)
+
+        return converted
 
     def _format_world_book_entries(
         self, entries: Optional[List[Dict]], user_name: str

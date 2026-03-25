@@ -58,18 +58,18 @@ class NoneEmbeddingService:
 
 
 class ApiEmbeddingService:
-    """API 向量模式的服务，使用 Gemini Embedding API"""
+    """API 向量模式的服务，使用 AIService Embedding API"""
 
     def __init__(self):
-        self._gemini_service = None
+        self._ai_service = None
 
-    def _get_gemini_service(self):
-        """延迟导入 Gemini 服务以避免循环导入"""
-        if self._gemini_service is None:
-            from src.chat.services.ai import gemini_service
+    def _get_ai_service(self):
+        """延迟导入 AIService 以避免循环导入"""
+        if self._ai_service is None:
+            from src.chat.services.ai.service import ai_service
 
-            self._gemini_service = gemini_service
-        return self._gemini_service
+            self._ai_service = ai_service
+        return self._ai_service
 
     async def generate_embedding(
         self,
@@ -77,15 +77,15 @@ class ApiEmbeddingService:
         task_type: str = "retrieval_document",
         title: Optional[str] = None,
     ) -> Optional[List[float]]:
-        """使用 Gemini API 生成 embedding"""
-        service = self._get_gemini_service()
-        return await service.generate_embedding(text, task_type, title)
+        """使用 AIService 生成 embedding"""
+        service = self._get_ai_service()
+        return await service.generate_embedding(text)
 
     async def check_connection(self) -> bool:
-        """检查 Gemini API 是否可用"""
+        """检查 AIService 是否可用"""
         try:
-            service = self._get_gemini_service()
-            return service.key_rotation_service is not None
+            service = self._get_ai_service()
+            return service.is_available()
         except Exception:
             return False
 

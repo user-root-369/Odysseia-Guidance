@@ -63,12 +63,20 @@ class ToolDeclaration:
             }
         }
         """
+        # 导入转换器（延迟导入避免循环依赖）
+        from src.chat.services.ai.utils.tool_converter import ToolConverter
+
+        # 将 Gemini 格式的 parameters 转换为 OpenAI 格式
+        converted_parameters = ToolConverter.convert_schema_to_openai_format(
+            self.parameters
+        )
+
         return {
             "type": "function",
             "function": {
                 "name": self.name,
                 "description": self.description,
-                "parameters": self.parameters,
+                "parameters": converted_parameters,
             },
         }
 

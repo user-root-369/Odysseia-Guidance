@@ -10,7 +10,7 @@ import io
 # 导入新的 Service
 from src.chat.services.chat_service import chat_service
 from src.chat.services.message_processor import message_processor
-from src.chat.services.ai import gemini_service
+from src.chat.services.ai.service import ai_service
 from src.chat.features.tools.functions.summarize_channel import text_to_summary_image
 
 
@@ -99,7 +99,7 @@ class AIChatCog(commands.Cog):
             try:
                 # --- 响应发送逻辑 ---
                 # 动态获取上次调用的工具列表，如果不存在则为空列表
-                last_tools = getattr(gemini_service, "last_called_tools", [])
+                last_tools = getattr(ai_service, "last_called_tools", [])
 
                 # 1. 如果调用了总结工具，总是转换为图片发送
                 if "summarize_channel" in last_tools:

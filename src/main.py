@@ -30,8 +30,8 @@ from src.chat.features.world_book.database.world_book_db_manager import (
 # 添加到全局的 tool_registry 中。
 # 动态加载器会自动处理工具的加载，此处不再需要手动导入。
 
-# 导入全局 ai_service 实例（兼容层，提供与旧 gemini_service 相同的接口）
-from src.chat.services.ai import gemini_service, ai_service
+# 导入全局 ai_service 实例
+from src.chat.services.ai.service import ai_service
 from src.chat.services.review_service import initialize_review_service
 from src.chat.features.work_game.services.work_db_service import WorkDBService
 from src.chat.utils.command_sync import sync_commands
@@ -458,10 +458,24 @@ async def main():
     # 4. 创建并运行机器人实例
     bot = GuidanceBot()
     guidance_db_manager.set_bot_instance(bot)
-    # 在机器人启动时，将 bot 实例注入到 GeminiService 中
+
+    # 在机器人启动时，将 bot 实例注入到 AIService 中
     # 这是确保工具能够访问 Discord API 的关键步骤
-    gemini_service.set_bot(bot)
-    # 为 context_service_test 注入 bot 实例，使其能够访问缓存
+    ai_service.set_bot(bot)
+
+    # 加载工具并设置到 AIService
+    from src.chat.features.tools.tool_loader import load_tools_from_directory
+    from src.chat.features.tools.services.tool_service import ToolService
+
+    available_tools, tool_map = load_tools_from_directory(
+        "src/chat/features/tools/functions"
+    )
+    tool_service = ToolService(
+        bot=bot, tool_map=tool_map, tool_declarations=available_tools
+    )
+    ai_service.set_tools(available_tools, tool_map, tool_service)
+    log.info(f"已加载 {len(available_tools)} 个工具: {list(tool_map.keys())}")
+
     # 为 context_service_test 注入 bot 实例，使其能够访问缓存
     from src.chat.services.context_service_test import initialize_context_service_test
 

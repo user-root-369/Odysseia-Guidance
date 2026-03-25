@@ -11,7 +11,8 @@ from src.chat.config.chat_config import (
 from src.chat.config import chat_config
 from src.chat.features.affection.service.affection_service import AffectionService
 from src.chat.features.affection.service.confession_service import ConfessionService
-from src.chat.services.ai import gemini_service
+from src.chat.services.ai.service import ai_service
+from src.chat.services.ai.providers.base import GenerationConfig
 from src.chat.services.prompt_service import prompt_service
 from src.chat.utils.prompt_utils import replace_emojis
 from src.config import DEVELOPER_USER_IDS
@@ -109,9 +110,10 @@ class ConfessionCog(commands.Cog):
                 affection_level=level_name,
             )
 
-            ai_response = await gemini_service.generate_confession_response(
-                formatted_prompt
-            )
+            # 使用 ai_service.generate() 方法
+            messages = [{"role": "user", "content": formatted_prompt}]
+            result = await ai_service.generate(messages=messages)
+            ai_response = result.content
 
             if not ai_response:
                 await interaction.followup.send(

@@ -56,7 +56,7 @@ async def get_yearly_summary(**kwargs) -> Dict[str, Any]:
     log.info(f"--- [工具执行]: get_yearly_summary, user_id={user_id}, year={year} ---")
 
     # 延迟导入以避免循环依赖
-    from src.chat.services.ai import gemini_service
+    from src.chat.services.ai.service import ai_service
 
     # 1. 检查用户是否已经生成过当年的总结
     # 1. 检查用户生成次数是否已达上限
@@ -72,12 +72,12 @@ async def get_yearly_summary(**kwargs) -> Dict[str, Any]:
         return {"status": "limit_reached", "message": message}
 
     # 2. 获取 Discord 用户对象以便发送私信
-    if not gemini_service.bot:
-        log.error("Bot 实例尚未注入 GeminiService，无法发送年度总结。")
+    if not ai_service.bot:
+        log.error("Bot 实例尚未注入AIService，无法发送年度总结。")
         return {"status": "error", "message": "机器人核心服务异常，暂时无法生成总结。"}
 
     try:
-        user = await gemini_service.bot.fetch_user(user_id)
+        user = await ai_service.bot.fetch_user(user_id)
     except discord.NotFound:
         log.warning(f"无法找到 ID 为 {user_id} 的用户，无法发送年度总结。")
         return {"status": "error", "message": "似乎找不到你这位用户了呢。"}
@@ -110,23 +110,23 @@ async def get_yearly_summary(**kwargs) -> Dict[str, Any]:
             # 为 Tier 1 和 Tier 2 生成长文本并发送
             prompt = _create_tier1_or_2_prompt(tier, user, summary_data)
 
-            # 使用 gemini_service 内部的 AI 调用能力
-            ai_response = await gemini_service.generate_response(
-                user_id=user_id,
-                guild_id=0,  # 私信场景，guild_id 不重要
-                message=prompt,
-                user_name=user.display_name,
-                # 传入最少的参数，避免不必要的上下文干扰
+            # 使用 AIService 生成总结
+            from src.chat.services.ai.providers.base import GenerationConfig
+
+            config = GenerationConfig(temperature=0.9, max_output_tokens=2048)
+            result = await ai_service.generate(
+                messages=[{"role": "user", "content": prompt}],
+                config=config,
             )
 
-            if not ai_response:
+            if not result or not result.content:
                 log.error(f"为 Tier {tier} 用户 {user_id} 生成总结时 AI 未返回内容。")
                 return {
                     "status": "error",
                     "message": "在为你撰写总结时，我的灵感突然消失了...",
                 }
 
-            await user.send(ai_response)
+            await user.send(result.content)
             log.info(
                 f"已成功为 Tier {tier} 用户 {user.name} ({user_id}) 发送年度总结长文。"
             )

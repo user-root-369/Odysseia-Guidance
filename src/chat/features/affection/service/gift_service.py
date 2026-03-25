@@ -1,16 +1,17 @@
 import logging
-from src.chat.services.ai import gemini_service
+from src.chat.services.ai.service import ai_service
 from src.chat.features.affection.service.affection_service import AffectionService
 from src.chat.utils.prompt_utils import extract_persona_prompt
 from src.chat.config.prompts import SYSTEM_PROMPT
 from src.chat.config import chat_config as app_config  # 导入 chat_config
+from src.chat.services.ai.providers.base import GenerationConfig
 
 log = logging.getLogger(__name__)
 
 
 class GiftService:
-    def __init__(self, gemini_svc, affection_service: AffectionService):
-        self.gemini_service = gemini_service
+    def __init__(self, ai_svc, affection_service: AffectionService):
+        self.ai_service = ai_svc
         self.affection_service = affection_service
 
     async def generate_gift_response(self, user, item_name: str) -> str:
@@ -39,11 +40,24 @@ class GiftService:
 
         log.info(f"为礼物 {item_name} 生成AI回应的完整提示: {combined_prompt}")
 
-        # 使用新的 generate_simple_response 方法，并传入完整的生成配置
-        response_text = await self.gemini_service.generate_simple_response(
-            prompt=combined_prompt, generation_config=gift_gen_config
+        # 构建 messages 格式
+        messages = [{"role": "user", "content": combined_prompt}]
+
+        # 创建 GenerationConfig
+        config = GenerationConfig(
+            temperature=gift_gen_config.get("temperature", 1.0),
+            top_p=gift_gen_config.get("top_p", 0.95),
+            max_output_tokens=gift_gen_config.get("max_output_tokens", 1024),
         )
+
+        # 使用 ai_service.generate() 方法
+        result = await self.ai_service.generate(messages=messages, config=config)
+        response_text = result.content
 
         log.info(f"为礼物 {item_name} 生成AI回应的返回结果: {response_text}")
 
         return response_text or ""
+
+
+# 创建单例
+gift_service = GiftService(ai_service, AffectionService())

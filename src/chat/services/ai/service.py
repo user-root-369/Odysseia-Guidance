@@ -268,6 +268,11 @@ class AIService:
         provider_name = self._model_to_provider.get(model_name, "")
         log.info(f"[AIService] 使用模型: {model_name}, Provider: {provider_name}")
 
+        # 预处理消息：对于不支持视觉的 Provider，将图片转换为文字描述
+        messages = await self._preprocess_messages_for_vision(
+            messages, provider, **kwargs
+        )
+
         # 记录完整上下文日志（如果启用）
         self._log_full_context_if_enabled(messages, tools, model_name)
 
@@ -345,6 +350,11 @@ class AIService:
         provider_name = self._model_to_provider.get(model_name, "")
         log.info(
             f"[AIService] 使用模型: {model_name}, Provider: {provider_name} (with tools)"
+        )
+
+        # 预处理消息：对于不支持视觉的 Provider，将图片转换为文字描述
+        messages = await self._preprocess_messages_for_vision(
+            messages, provider, **kwargs
         )
 
         # 记录完整上下文日志（如果启用）
@@ -522,6 +532,181 @@ class AIService:
         log.warning("没有可用的 Provider 生成嵌入")
         return None
 
+    async def _preprocess_messages_for_vision(
+        self,
+        messages: List[Dict[str, Any]],
+        provider: BaseProvider,
+        **kwargs,
+    ) -> List[Dict[str, Any]]:
+        """
+        预处理消息中的图片内容
+
+        对于不支持视觉的 Provider，使用 Ollama Vision 将图片转换为文字描述
+
+        Args:
+            messages: 对话消息列表
+            provider: 目标 Provider
+            **kwargs: 其他参数（可包含 vision_prompt 用于自定义图片描述提示词）
+
+        Returns:
+            处理后的消息列表
+        """
+        # 如果 Provider 支持视觉，直接返回原消息
+        if getattr(provider, "supports_vision", False):
+            return messages
+
+        # 检查消息中是否有图片内容
+        # 支持两种格式：
+        # 1. 内部格式: {"type": "image", "image_bytes": ..., "mime_type": ...}
+        # 2. OpenAI 格式: {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
+        has_image = False
+        for message in messages:
+            content = message.get("content")
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict):
+                        if part.get("type") == "image":
+                            has_image = True
+                            break
+                        elif part.get("type") == "image_url":
+                            has_image = True
+                            break
+            if has_image:
+                break
+
+        # 如果没有图片，直接返回
+        if not has_image:
+            return messages
+
+        log.info(
+            "[AIService] 检测到图片内容，Provider 不支持视觉，使用 Ollama Vision 转换"
+        )
+
+        # 延迟导入避免循环依赖
+        from src.chat.services.ollama_vision_service import ollama_vision_service
+
+        # 处理每条消息
+        processed_messages = []
+        for message in messages:
+            content = message.get("content")
+            role = message.get("role", "user")
+
+            if isinstance(content, list):
+                # 处理多部分内容
+                text_parts = []
+                image_descriptions = []
+
+                for part in content:
+                    if isinstance(part, dict):
+                        if part.get("type") == "text":
+                            text_parts.append(part.get("text", ""))
+                        elif part.get("type") == "image":
+                            # 内部格式：直接使用 image_bytes
+                            image_bytes = part.get("image_bytes")
+                            mime_type = part.get("mime_type", "image/png")
+
+                            if image_bytes:
+                                # 获取自定义提示词或使用默认
+                                vision_prompt = kwargs.get("vision_prompt")
+                                try:
+                                    if vision_prompt:
+                                        description = (
+                                            await ollama_vision_service.describe_image(
+                                                image_bytes, vision_prompt, mime_type
+                                            )
+                                        )
+                                    else:
+                                        description = (
+                                            await ollama_vision_service.describe_image(
+                                                image_bytes,
+                                                "请用中文描述这张图片的内容。",
+                                                mime_type,
+                                            )
+                                        )
+
+                                    if description:
+                                        image_descriptions.append(
+                                            f"[图片内容: {description}]"
+                                        )
+                                        log.debug(f"图片描述: {description[:100]}...")
+                                    else:
+                                        image_descriptions.append(
+                                            "[图片内容: 无法识别]"
+                                        )
+                                except Exception as e:
+                                    log.error(f"Ollama Vision 处理图片失败: {e}")
+                                    image_descriptions.append("[图片内容: 处理失败]")
+
+                        elif part.get("type") == "image_url":
+                            # OpenAI 格式：从 data URL 中提取 base64 图片
+                            import base64
+
+                            image_url_data = part.get("image_url", {})
+                            url = image_url_data.get("url", "")
+
+                            if url.startswith("data:"):
+                                # 解析 data URL: data:image/png;base64,xxxxx
+                                try:
+                                    # 提取 MIME 类型和 base64 数据
+                                    header, base64_data = url.split(",", 1)
+                                    # header 格式: data:image/png;base64
+                                    mime_match = header.split(":")[1].split(";")[0]
+                                    mime_type = (
+                                        mime_match
+                                        if mime_match.startswith("image/")
+                                        else "image/png"
+                                    )
+
+                                    # 解码 base64
+                                    image_bytes = base64.b64decode(base64_data)
+
+                                    # 获取自定义提示词或使用默认
+                                    vision_prompt = kwargs.get("vision_prompt")
+                                    if vision_prompt:
+                                        description = (
+                                            await ollama_vision_service.describe_image(
+                                                image_bytes, vision_prompt, mime_type
+                                            )
+                                        )
+                                    else:
+                                        description = (
+                                            await ollama_vision_service.describe_image(
+                                                image_bytes,
+                                                "请用中文描述这张图片的内容。",
+                                                mime_type,
+                                            )
+                                        )
+
+                                    if description:
+                                        image_descriptions.append(
+                                            f"[图片内容: {description}]"
+                                        )
+                                        log.debug(f"图片描述: {description[:100]}...")
+                                    else:
+                                        image_descriptions.append(
+                                            "[图片内容: 无法识别]"
+                                        )
+                                except Exception as e:
+                                    log.error(f"解析或处理 OpenAI 格式图片失败: {e}")
+                                    image_descriptions.append("[图片内容: 处理失败]")
+
+                # 合并文本和图片描述
+                final_text = "\n".join(text_parts)
+                if image_descriptions:
+                    final_text += "\n" + "\n".join(image_descriptions)
+
+                processed_messages.append(
+                    {
+                        "role": role,
+                        "content": final_text,
+                    }
+                )
+            else:
+                # 非多部分内容，直接保留
+                processed_messages.append(message)
+
+        return processed_messages
+
     def _get_default_model(self) -> str:
         """获取默认模型名称"""
         if self._default_provider:
@@ -551,24 +736,12 @@ class AIService:
 
         log.info(f"--- AI 完整上下文 (模型: {model_name}) ---")
 
-        # 序列化消息用于日志
-        def serialize_for_logging(obj: Any) -> Any:
-            """递归序列化对象用于日志输出"""
-            if isinstance(obj, dict):
-                return {k: serialize_for_logging(v) for k, v in obj.items()}
-            elif isinstance(obj, list):
-                return [serialize_for_logging(item) for item in obj]
-            elif hasattr(obj, "__dict__"):
-                return {k: serialize_for_logging(v) for k, v in vars(obj).items()}
-            elif isinstance(obj, bytes):
-                return f"<bytes: {len(obj)} bytes>"
-            else:
-                return obj
-
         # 记录消息
         log.info("Messages:")
         log.info(
-            json.dumps(serialize_for_logging(messages), ensure_ascii=False, indent=2)
+            json.dumps(
+                self._serialize_for_logging(messages), ensure_ascii=False, indent=2
+            )
         )
 
         # 记录工具（如果有）
@@ -577,14 +750,62 @@ class AIService:
             tools_serialized = []
             for tool in tools:
                 if hasattr(tool, "__dict__"):
-                    tools_serialized.append(serialize_for_logging(vars(tool)))
+                    tools_serialized.append(self._serialize_for_logging(vars(tool)))
                 elif isinstance(tool, dict):
-                    tools_serialized.append(serialize_for_logging(tool))
+                    tools_serialized.append(self._serialize_for_logging(tool))
                 else:
                     tools_serialized.append(str(tool))
             log.info(json.dumps(tools_serialized, ensure_ascii=False, indent=2))
 
         log.info("------------------------------------")
+
+    @staticmethod
+    def _serialize_for_logging(obj: Any, _seen: Optional[set] = None) -> Any:
+        """
+        递归序列化对象用于日志输出，防止循环引用
+
+        Args:
+            obj: 要序列化的对象
+            _seen: 已处理对象 ID 集合（用于防止循环引用）
+
+        Returns:
+            可 JSON 序列化的对象
+        """
+        if _seen is None:
+            _seen = set()
+
+        # 防止循环引用
+        obj_id = id(obj)
+        if obj_id in _seen:
+            return "<circular reference>"
+
+        # 处理基本类型（直接可 JSON 序列化）
+        if obj is None or isinstance(obj, (bool, int, float, str)):
+            return obj
+
+        # 处理函数/方法/类等不可序列化的对象
+        if callable(obj):
+            return f"<{type(obj).__name__}: {getattr(obj, '__name__', str(obj))}>"
+
+        if isinstance(obj, dict):
+            _seen.add(obj_id)
+            return {
+                k: AIService._serialize_for_logging(v, _seen) for k, v in obj.items()
+            }
+        elif isinstance(obj, (list, tuple)):
+            _seen.add(obj_id)
+            return [AIService._serialize_for_logging(item, _seen) for item in obj]
+        elif isinstance(obj, bytes):
+            return f"<bytes: {len(obj)} bytes>"
+        elif hasattr(obj, "__dict__"):
+            _seen.add(obj_id)
+            return {
+                k: AIService._serialize_for_logging(v, _seen)
+                for k, v in vars(obj).items()
+            }
+        else:
+            # 其他类型转为字符串
+            return f"<{type(obj).__name__}: {str(obj)}>"
 
     def is_available(self) -> bool:
         """检查是否有可用的 Provider"""

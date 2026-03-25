@@ -6,7 +6,8 @@ from typing import Dict, Any, Optional
 import discord.abc
 
 # 导入所需的服务
-from src.chat.services.ai import gemini_service
+from src.chat.services.ai.service import ai_service
+from src.chat.services.prompt_service import prompt_service
 from src.chat.services.context_service_test import get_context_service  # 导入测试服务
 from src.chat.features.world_book.services.world_book_service import world_book_service
 from src.chat.features.affection.service.affection_service import affection_service
@@ -23,6 +24,8 @@ from src.chat.config.chat_config import DEBUG_CONFIG
 from src.chat.features.chat_settings.services.chat_settings_service import (
     chat_settings_service,
 )
+from src.chat.services.ai.providers.base import GenerationConfig
+from src.chat.services.ai.providers.provider_format import ProviderFormat, MessageFormat
 
 log = logging.getLogger(__name__)
 
@@ -34,7 +37,7 @@ class ChatService:
 
     async def should_process_message(self, message: discord.Message) -> bool:
         """
-        执行前置检查，判断消息是否应该被处理，以避免不必要的“输入中”状态。
+        执行前置检查，判断消息是否应该被处理，以避免不必要的"输入中"状态。
         """
         author = message.author
         guild_id = message.guild.id if message.guild else 0
@@ -55,7 +58,7 @@ class ChatService:
             # 检查是否满足通行许可的例外条件
             pass_is_granted = False
             if isinstance(message.channel, discord.Thread) and message.channel.owner_id:
-                # 修正逻辑：只有当帖主明确设置了个人CD时，才算拥有“通行许可”
+                # 修正逻辑：只有当帖主明确设置了个人CD时，才算拥有"通行许可"
                 owner_id = message.channel.owner_id
                 query = "SELECT thread_cooldown_seconds, thread_cooldown_duration, thread_cooldown_limit FROM user_coins WHERE user_id = ?"
                 owner_config_row = await chat_db_manager._execute(
@@ -238,7 +241,6 @@ class ChatService:
                 log.error(f"为用户 {author.id} 发放每日对话奖励时出错: {coin_e}")
 
             # 4. --- 调用AI生成回复 ---
-            # PromptService 内部会处理合并用户消息的逻辑，这里我们总是传递 final_content
             # 记录发送给AI的核心上下文
             if DEBUG_CONFIG["LOG_FINAL_CONTEXT"]:
                 log.info(f"发送给AI -> 最终上下文: {channel_context}")
@@ -258,26 +260,74 @@ class ChatService:
                 log.info("消息不在帖子中，将使用默认工具集。")
             # --- [结束] ---
 
-            ai_response = await gemini_service.generate_response(
-                author.id,
-                guild_id,
+            # 获取当前模型对应的 Provider 类型
+            provider_name = ai_service._model_to_provider.get(current_model)
+
+            # 根据 Provider 类型确定输出格式（使用统一的格式判断工具）
+            message_format = ProviderFormat.get_message_format(provider_name or "")
+            output_format = (
+                "openai" if message_format == MessageFormat.OPENAI else "gemini"
+            )
+
+            # 使用 PromptService 构建消息
+            messages = await prompt_service.build_chat_prompt(
+                user_name=author.display_name,
                 message=user_content,
-                channel=message.channel,
                 replied_message=replied_content,
                 images=image_data_list if image_data_list else None,
-                user_name=author.display_name,
                 channel_context=channel_context,
                 world_book_entries=world_book_entries,
-                personal_summary=personal_summary,
                 affection_status=affection_status,
-                user_profile_data=user_profile_data,
                 guild_name=guild_name,
                 location_name=location_name,
-                model_name=current_model,  # 传递模型名称
-                user_id_for_settings=user_id_for_settings,  # 传递用于工具设置的用户ID
-                conversation_memory=conversation_memory_text,  # 第二层：对话记忆 RAG 内容
-                latest_block=latest_block_content,  # 第三层：最新对话块
+                personal_summary=personal_summary,
+                user_profile_data=user_profile_data,
+                model_name=current_model,
+                channel=message.channel,
+                conversation_memory=conversation_memory_text,
+                latest_block=latest_block_content,
+                output_format=output_format,
             )
+
+            # 获取工具列表（根据 Provider 类型返回对应格式）
+            tools = await ai_service.tool_service.get_dynamic_tools_for_context(
+                user_id_for_settings, provider_type=provider_name
+            )
+
+            # 定义工具执行器
+            async def tool_executor(call, **kwargs):
+                return await ai_service.tool_service.execute_tool_call(
+                    call,
+                    channel=message.channel,
+                    user_id=author.id,
+                    user_id_for_settings=user_id_for_settings,
+                )
+
+            # 创建生成配置
+            generation_config = GenerationConfig(
+                temperature=1.0,
+                top_p=0.95,
+                max_output_tokens=8192,
+            )
+
+            # 调用 AIService
+            result = await ai_service.generate_with_tools(
+                messages=messages,
+                config=generation_config,
+                model=current_model,
+                tools=tools,
+                tool_executor=tool_executor,
+            )
+
+            ai_response = result.content
+
+            # 记录最后调用的工具
+            if result.tool_calls:
+                ai_service.last_called_tools = [
+                    tc.get("name", "") for tc in result.tool_calls
+                ]
+            else:
+                ai_service.last_called_tools = []
 
             if not ai_response:
                 log.info(f"AI服务未返回回复（可能由于冷却），跳过用户 {author.id}。")
@@ -285,12 +335,14 @@ class ChatService:
 
             # --- 新增：调用新的个人记忆服务 ---
             # 在获得AI回复后，记录这次对话并根据需要触发总结
+            # 传递 current_model 使总结逻辑跟随主模型
             if user_profile_data:
                 await personal_memory_service.update_and_conditionally_summarize_memory(
                     user_id=author.id,
                     user_name=author.display_name,
                     user_content=user_content,
                     ai_response=ai_response,
+                    current_model=current_model,
                 )
 
             # 更新新系统的CD
@@ -303,12 +355,12 @@ class ChatService:
 
             # --- 新增：为特定工具调用添加后缀 ---
             if (
-                gemini_service.last_called_tools
-                and "query_tutorial_knowledge_base" in gemini_service.last_called_tools
+                ai_service.last_called_tools
+                and "query_tutorial_knowledge_base" in ai_service.last_called_tools
             ):
                 final_response += chat_config.TUTORIAL_SEARCH_SUFFIX
                 # 清空列表，避免影响下一次对话
-                gemini_service.last_called_tools = []
+                ai_service.last_called_tools = []
 
             # 6. --- 异步执行后续任务（不阻塞回复） ---
             # 此处现在只应包含不影响核心回复流程的日志记录等任务

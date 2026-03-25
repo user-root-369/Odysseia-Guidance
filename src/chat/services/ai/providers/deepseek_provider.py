@@ -201,6 +201,8 @@ class DeepSeekProvider(BaseProvider):
             return await self.generate(messages, config, tools, model_name)
 
         conversation_history = messages.copy()
+        # 收集所有工具调用，用于最终返回
+        all_tool_calls = []
 
         try:
             for iteration in range(max_iterations):
@@ -218,11 +220,22 @@ class DeepSeekProvider(BaseProvider):
 
                 # 检查是否有工具调用
                 if not result.has_tool_calls or not result.tool_calls:
+                    # 最终返回时，附加所有收集的工具调用信息
+                    if all_tool_calls:
+                        return GenerationResult(
+                            content=result.content,
+                            model_used=result.model_used,
+                            finish_reason=result.finish_reason,
+                            tool_calls=all_tool_calls,
+                        )
                     return result
 
                 # 执行工具调用
                 tool_calls_list = result.tool_calls
                 log.info(f"DeepSeek 请求调用 {len(tool_calls_list)} 个工具")
+
+                # 收集工具调用
+                all_tool_calls.extend(tool_calls_list)
 
                 # 将模型响应添加到对话历史
                 assistant_message = {
@@ -272,6 +285,7 @@ class DeepSeekProvider(BaseProvider):
                 content="抱歉，我在处理这个请求时遇到了一些复杂的情况，请换个方式问我。",
                 model_used=model_name,
                 finish_reason=FinishReason.MAX_ITERATIONS,
+                tool_calls=all_tool_calls,
             )
 
         except Exception as e:
@@ -336,8 +350,10 @@ class DeepSeekProvider(BaseProvider):
             body["stop"] = config.stop_sequences
 
         # 添加工具
+        # 工具格式由 ToolService.get_dynamic_tools_for_context() 统一转换
+        # DeepSeek Provider 接收 OpenAI 格式的工具列表
         if tools:
-            body["tools"] = ToolConverter.to_openai_tools(tools)
+            body["tools"] = tools
 
         return body
 

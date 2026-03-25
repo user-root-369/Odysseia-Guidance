@@ -47,8 +47,7 @@ async def summarize_channel(
     **kwargs,
 ) -> str:
     """
-    获取当前频道的消息历史。仅在用户明确要求"总结"时使用。
-    返回的消息格式为"作者(时间): 内容"。
+    被要求总结时必须使用, 获取当前频道的消息历史。
     """
     channel = kwargs.get("channel")
     if not channel or not isinstance(channel, discord.abc.Messageable):

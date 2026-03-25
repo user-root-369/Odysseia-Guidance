@@ -30,7 +30,6 @@ from .providers import (
 )
 from .config.providers import ProviderConfig, get_provider_configs
 from .config.models import ModelConfig, get_model_configs, FALLBACK_PRIORITY
-from .compat_service import gemini_service, GeminiServiceCompat
 
 __all__ = [
     # 核心服务
@@ -59,7 +58,4 @@ __all__ = [
     "ModelConfig",
     "get_model_configs",
     "FALLBACK_PRIORITY",
-    # 兼容层
-    "gemini_service",
-    "GeminiServiceCompat",
 ]
