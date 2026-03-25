@@ -1,8 +1,12 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
+from typing import Dict, List, Any
 
 from src.chat.features.chat_settings.ui.chat_settings_view import ChatSettingsView
+from src.chat.features.chat_settings.services.chat_settings_service import (
+    chat_settings_service,
+)
 from src import config
 
 
@@ -13,8 +17,10 @@ async def is_authorized(interaction: discord.Interaction) -> bool:
         return True
 
     # 检查用户的角色ID是否在管理员角色列表中
-    if any(role.id in config.ADMIN_ROLE_IDS for role in interaction.user.roles):
-        return True
+    # 注意: interaction.user 在 guild 中应该是 Member 类型
+    if interaction.guild and isinstance(interaction.user, discord.Member):
+        if any(role.id in config.ADMIN_ROLE_IDS for role in interaction.user.roles):
+            return True
 
     return False
 
@@ -53,9 +59,31 @@ class ChatSettingsCog(commands.Cog):
         )
         embed.add_field(name="模型调用统计", value="---", inline=False)
 
-        for model_name in config.AVAILABLE_AI_MODELS:
-            count = view.model_usage_counts.get(model_name, 0)
-            embed.add_field(name=model_name, value=f"调用次数: {count}", inline=True)
+        # 获取所有可用模型及其 Provider 信息
+        models_with_provider = (
+            await chat_settings_service.get_available_models_with_provider()
+        )
+
+        # 按 Provider 分组
+        provider_groups: Dict[str, List[Dict[str, Any]]] = {}
+        for model in models_with_provider:
+            provider = model["provider"]
+            if provider not in provider_groups:
+                provider_groups[provider] = []
+            provider_groups[provider].append(model)
+
+        # 按 Provider 显示统计
+        for provider, models in provider_groups.items():
+            lines = []
+            for model in models:
+                count = view.model_usage_counts.get(model["model_name"], 0)
+                display_name = model.get("display_name", model["model_name"])
+                lines.append(f"{display_name}: {count}")
+            embed.add_field(
+                name=f"📦 {provider}",
+                value="\n".join(lines) if lines else "暂无使用记录",
+                inline=False,
+            )
 
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
         message = await interaction.original_response()

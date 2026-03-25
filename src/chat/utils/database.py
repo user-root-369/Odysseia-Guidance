@@ -520,9 +520,20 @@ class ChatDatabaseManager:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS ai_model_usage (
                     model_name TEXT PRIMARY KEY,
-                    usage_count INTEGER NOT NULL DEFAULT 0
+                    usage_count INTEGER NOT NULL DEFAULT 0,
+                    provider_name TEXT
                 );
             """)
+
+            # 检查并添加 provider_name 列到 ai_model_usage
+            cursor.execute("PRAGMA table_info(ai_model_usage);")
+            columns_model_usage = [info[1] for info in cursor.fetchall()]
+            if "provider_name" not in columns_model_usage:
+                cursor.execute("""
+                    ALTER TABLE ai_model_usage
+                    ADD COLUMN provider_name TEXT;
+                """)
+                log.info("已向 ai_model_usage 表添加 provider_name 列。")
 
             # --- 每日模型使用计数表 ---
             cursor.execute("""
@@ -530,9 +541,20 @@ class ChatDatabaseManager:
                     model_name TEXT NOT NULL,
                     usage_date TEXT NOT NULL,
                     usage_count INTEGER NOT NULL DEFAULT 0,
+                    provider_name TEXT,
                     PRIMARY KEY (model_name, usage_date)
                 );
             """)
+
+            # 检查并添加 provider_name 列到 daily_model_usage
+            cursor.execute("PRAGMA table_info(daily_model_usage);")
+            columns_daily_usage = [info[1] for info in cursor.fetchall()]
+            if "provider_name" not in columns_daily_usage:
+                cursor.execute("""
+                    ALTER TABLE daily_model_usage
+                    ADD COLUMN provider_name TEXT;
+                """)
+                log.info("已向 daily_model_usage 表添加 provider_name 列。")
 
             # --- 年度总结日志表 ---
             cursor.execute("""
@@ -1432,45 +1454,99 @@ class ChatDatabaseManager:
         return False
 
     # --- AI模型使用计数 ---
-    async def increment_model_usage(self, model_name: str) -> None:
-        """为一个模型增加累计和每日使用次数。"""
+    async def increment_model_usage(
+        self, model_name: str, provider_name: str = "unknown"
+    ) -> None:
+        """
+        为一个模型增加累计和每日使用次数。
+
+        Args:
+            model_name: 模型名称
+            provider_name: Provider 名称（如 gemini_official, deepseek 等）
+        """
         # 增加总数
         query_total = """
-            INSERT INTO ai_model_usage (model_name, usage_count)
-            VALUES (?, 1)
+            INSERT INTO ai_model_usage (model_name, usage_count, provider_name)
+            VALUES (?, 1, ?)
             ON CONFLICT(model_name) DO UPDATE SET
-                usage_count = usage_count + 1;
+                usage_count = usage_count + 1,
+                provider_name = COALESCE(excluded.provider_name, ai_model_usage.provider_name);
         """
         await self._execute(
-            self._db_transaction, query_total, (model_name,), commit=True
+            self._db_transaction, query_total, (model_name, provider_name), commit=True
         )
 
         # 增加当日计数
         today_date_str = get_beijing_today_str()
         query_daily = """
-            INSERT INTO daily_model_usage (model_name, usage_date, usage_count)
-            VALUES (?, ?, 1)
+            INSERT INTO daily_model_usage (model_name, usage_date, usage_count, provider_name)
+            VALUES (?, ?, 1, ?)
             ON CONFLICT(model_name, usage_date) DO UPDATE SET
-                usage_count = usage_count + 1;
+                usage_count = usage_count + 1,
+                provider_name = COALESCE(excluded.provider_name, daily_model_usage.provider_name);
         """
         await self._execute(
-            self._db_transaction, query_daily, (model_name, today_date_str), commit=True
+            self._db_transaction,
+            query_daily,
+            (model_name, today_date_str, provider_name),
+            commit=True,
         )
 
     async def get_model_usage_counts(self) -> List[sqlite3.Row]:
-        """获取所有模型累计的使用次数。"""
-        query = "SELECT model_name, usage_count FROM ai_model_usage"
+        """获取所有模型累计的使用次数（包含 provider_name）。"""
+        query = "SELECT model_name, usage_count, provider_name FROM ai_model_usage"
         return await self._execute(self._db_transaction, query, fetch="all")
 
     async def get_model_usage_counts_today(self) -> List[sqlite3.Row]:
-        """获取今天所有模型的使用次数。"""
+        """获取今天所有模型的使用次数（包含 provider_name）。"""
         today_date_str = get_beijing_today_str()
-        query = (
-            "SELECT model_name, usage_count FROM daily_model_usage WHERE usage_date = ?"
-        )
+        query = "SELECT model_name, usage_count, provider_name FROM daily_model_usage WHERE usage_date = ?"
         return await self._execute(
             self._db_transaction, query, (today_date_str,), fetch="all"
         )
+
+    async def get_provider_usage_stats(self) -> dict:
+        """
+        获取按 Provider 分组的使用统计。
+
+        Returns:
+            {"gemini_official": {"total": 100, "today": 10}, ...}
+        """
+        # 获取累计统计
+        query_total = """
+            SELECT provider_name, SUM(usage_count) as total_count
+            FROM ai_model_usage
+            WHERE provider_name IS NOT NULL
+            GROUP BY provider_name
+        """
+        total_rows = await self._execute(self._db_transaction, query_total, fetch="all")
+
+        # 获取今日统计
+        today_date_str = get_beijing_today_str()
+        query_today = """
+            SELECT provider_name, SUM(usage_count) as today_count
+            FROM daily_model_usage
+            WHERE usage_date = ? AND provider_name IS NOT NULL
+            GROUP BY provider_name
+        """
+        today_rows = await self._execute(
+            self._db_transaction, query_today, (today_date_str,), fetch="all"
+        )
+
+        # 合并结果
+        result = {}
+        for row in total_rows:
+            provider = row["provider_name"]
+            result[provider] = {"total": row["total_count"], "today": 0}
+
+        for row in today_rows:
+            provider = row["provider_name"]
+            if provider in result:
+                result[provider]["today"] = row["today_count"]
+            else:
+                result[provider] = {"total": 0, "today": row["today_count"]}
+
+        return result
 
     async def get_total_work_count_today(self) -> int:
         """获取今天所有用户的总打工次数。"""

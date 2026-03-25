@@ -319,6 +319,13 @@ class ChatService:
                 tool_executor=tool_executor,
             )
 
+            # 记录模型使用统计
+            provider_name = ai_service._model_to_provider.get(current_model, "unknown")
+            await chat_settings_service.increment_model_usage(
+                model_name=current_model, provider_name=provider_name
+            )
+            log.debug(f"记录模型使用: {current_model} (Provider: {provider_name})")
+
             ai_response = result.content
 
             # 记录最后调用的工具

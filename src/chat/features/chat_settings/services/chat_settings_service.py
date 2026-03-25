@@ -3,7 +3,6 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta, timezone
 from src.chat.utils.database import chat_db_manager
 from src.chat.services.event_service import event_service
-from src import config
 
 
 class ChatSettingsService:
@@ -276,13 +275,21 @@ class ChatSettingsService:
     # --- AI Model Settings ---
 
     def get_available_ai_models(self) -> List[str]:
-        """获取所有可用的AI模型。"""
-        return config.AVAILABLE_AI_MODELS
+        """获取所有可用的AI模型（从 AIService 动态获取）。"""
+        from src.chat.services.ai import ai_service
+
+        return ai_service.get_available_models()
 
     async def get_current_ai_model(self) -> str:
         """获取当前设置的全局AI模型。"""
+        from src.chat.services.ai import ai_service
+
         model = await self.db_manager.get_global_setting("ai_model")
-        return model if model else config.AVAILABLE_AI_MODELS[0]
+        if model:
+            return model
+        # 默认返回第一个可用模型
+        available_models = ai_service.get_available_models()
+        return available_models[0] if available_models else "gemini-2.5-flash"
 
     async def set_ai_model(self, model: str) -> None:
         """设置全局AI模型。"""
@@ -395,15 +402,105 @@ class ChatSettingsService:
 
     # --- AI Model Usage ---
 
-    async def increment_model_usage(self, model_name: str) -> None:
-        """记录一次模型使用。"""
+    async def increment_model_usage(
+        self, model_name: str, provider_name: str = "unknown"
+    ) -> None:
+        """
+        记录一次模型使用。
+
+        Args:
+            model_name: 模型名称
+            provider_name: Provider 名称（如 gemini_official, deepseek 等）
+        """
         if model_name:
-            await self.db_manager.increment_model_usage(model_name)
+            await self.db_manager.increment_model_usage(model_name, provider_name)
 
     async def get_model_usage_counts(self) -> Dict[str, int]:
         """获取所有模型的使用计数。"""
         rows = await self.db_manager.get_model_usage_counts()
         return {row["model_name"]: row["usage_count"] for row in rows}
+
+    async def get_model_usage_counts_with_provider(self) -> List[Dict[str, Any]]:
+        """
+        获取所有模型的使用计数（包含 Provider 信息）。
+
+        Returns:
+            [{"model_name": "...", "usage_count": 100, "provider_name": "..."}, ...]
+        """
+        rows = await self.db_manager.get_model_usage_counts()
+        return [
+            {
+                "model_name": row["model_name"],
+                "usage_count": row["usage_count"],
+                "provider_name": row["provider_name"] or "unknown",
+            }
+            for row in rows
+        ]
+
+    async def get_provider_usage_stats(self) -> Dict[str, Dict[str, int]]:
+        """
+        获取按 Provider 分组的使用统计。
+
+        Returns:
+            {"gemini_official": {"total": 100, "today": 10}, ...}
+        """
+        return await self.db_manager.get_provider_usage_stats()
+
+    async def get_available_models_with_provider(self) -> List[Dict[str, Any]]:
+        """
+        获取所有可用模型及其 Provider 信息。
+
+        优先从数据库读取有使用记录的模型，然后合并模型配置中的模型。
+
+        Returns:
+            [{"model_name": "...", "display_name": "...", "provider": "...", ...}, ...]
+        """
+        from src.chat.services.ai.config.models import get_model_configs
+
+        # 从模型配置获取
+        model_configs = get_model_configs()
+
+        # 从数据库获取所有有记录的模型
+        db_models = await self.db_manager.get_model_usage_counts()
+
+        result = []
+        seen_models = set()
+
+        # 1. 先添加数据库中有记录的模型
+        for row in db_models:
+            model_name = row["model_name"]
+            if model_name in seen_models:
+                continue
+            seen_models.add(model_name)
+
+            # 尝试从配置获取详细信息
+            config = model_configs.get(model_name)
+            result.append(
+                {
+                    "model_name": model_name,
+                    "display_name": config.display_name if config else model_name,
+                    "provider": row["provider_name"] or "unknown",
+                    "supports_vision": config.supports_vision if config else False,
+                    "supports_tools": config.supports_tools if config else True,
+                    "description": config.description if config else "",
+                }
+            )
+
+        # 2. 添加配置中有但数据库没有的模型
+        for model_name, config in model_configs.items():
+            if model_name not in seen_models:
+                result.append(
+                    {
+                        "model_name": model_name,
+                        "display_name": config.display_name if config else model_name,
+                        "provider": config.provider if config else "unknown",
+                        "supports_vision": config.supports_vision if config else False,
+                        "supports_tools": config.supports_tools if config else True,
+                        "description": config.description if config else "",
+                    }
+                )
+
+        return result
 
 
 # 单例实例

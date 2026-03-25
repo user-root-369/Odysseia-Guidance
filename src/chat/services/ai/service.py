@@ -80,7 +80,7 @@ class AIService:
 
                     # 建立模型到 Provider 的映射
                     for model_name in config.models:
-                        self._model_to_provider[model_name] = provider_name
+                        self._model_to_provider[model_name] = config.name
 
                     # 设置默认 Provider
                     if self._default_provider is None:

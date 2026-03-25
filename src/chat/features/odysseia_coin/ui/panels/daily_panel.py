@@ -1,4 +1,5 @@
 import discord
+
 from src.chat.utils.database import chat_db_manager
 
 from .base_panel import BasePanel
@@ -13,7 +14,7 @@ class DailyPanel(BasePanel):
         )
 
         try:
-            # 获取今天的模型使用数据
+            # 获取今天的模型使用数据（包含 provider_name）
             usage_today = await chat_db_manager.get_model_usage_counts_today()
 
             if not usage_today:
@@ -25,6 +26,10 @@ class DailyPanel(BasePanel):
             else:
                 total_replies_today = sum(row["usage_count"] for row in usage_today)
 
+                # 构建显示文本（只显示总数，不显示具体模型）
+                stats_lines = [f"类脑娘今天一共回复了 **{total_replies_today}** 句话！"]
+
+                # 添加评论
                 if total_replies_today < 500:
                     comment = "今天有点安静呢，是不是大家都在忙呀？"
                 elif 500 <= total_replies_today < 1000:
@@ -34,10 +39,8 @@ class DailyPanel(BasePanel):
                 else:
                     comment = "聊了这么多！我们是把一年的话都说完了吗？"
 
-                stats_text = (
-                    f"类脑娘今天一共回复了 **{total_replies_today}** 句话！\n"
-                    f"_{comment}_"
-                )
+                stats_lines.append(f"_{comment}_")
+                stats_text = "\n".join(stats_lines)
 
                 embed.add_field(name="今日回复统计", value=stats_text, inline=False)
 

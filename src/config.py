@@ -73,11 +73,12 @@ EMBED_COLOR_PRIMARY = 0x49989A  # 主要 Embed 颜色
 
 
 # --- 可用 AI 模型 ---
-AVAILABLE_AI_MODELS = [
-    "gemini-2.5-flash",
-    "gemini-flash-latest",
-    "gemini-2.5-flash-custom",
-    "gemini-3-pro-preview-custom",
-    "gemini-2.5-pro-custom",
-    "gemini-3-flash-custom",
-]
+# 注意: 此配置已废弃，请使用 ai_service.get_available_models() 获取动态模型列表
+# AVAILABLE_AI_MODELS = [
+#     "gemini-2.5-flash",
+#     "gemini-flash-latest",
+#     "gemini-2.5-flash-custom",
+#     "gemini-3-pro-preview-custom",
+#     "gemini-2.5-pro-custom",
+#     "gemini-3-flash-custom",
+# ]

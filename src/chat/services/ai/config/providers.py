@@ -81,7 +81,7 @@ def _parse_custom_gemini_endpoints() -> Dict[str, ProviderConfig]:
 
             if api_key and value:
                 config_name = f"gemini_custom_{endpoint_name}"
-                configs[model_name] = ProviderConfig(
+                configs[config_name] = ProviderConfig(
                     name=config_name,
                     type="custom",
                     api_key=api_key,
