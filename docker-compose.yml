@@ -8,6 +8,7 @@ services:
       - RUNNING_IN_DOCKER=true
       - OLLAMA_BASE_URL=http://ollama:11434
       - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3-embedding:0.6b}
+      - OLLAMA_VISION_MODEL=${OLLAMA_VISION_MODEL:-qwen3.5:0.8b}
       - VECTOR_MODE=${VECTOR_MODE:-local}
 
     # --- 部署方式二选一 ---
