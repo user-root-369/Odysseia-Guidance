@@ -89,9 +89,11 @@ class FeedingCog(commands.Cog):
 
             config = GenerationConfig(temperature=1.0, max_output_tokens=1024)
 
-            # 不传递自定义视觉提示词，让识图模型客观描述图片内容
-            # 这样可以正确处理搞怪图片等非食物内容
-            result = await ai_service.generate(messages=messages, config=config)
+            # 启用视觉转译（投喂功能需要识别图片内容）
+            # 即使 Provider 不支持视觉，也会使用 Ollama Vision 进行转换
+            result = await ai_service.generate(
+                messages=messages, config=config, enable_vision=True
+            )
             response_text = result.content
 
             if not response_text:

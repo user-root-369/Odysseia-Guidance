@@ -541,12 +541,16 @@ class AIService:
         """
         预处理消息中的图片内容
 
-        对于不支持视觉的 Provider，使用 Ollama Vision 将图片转换为文字描述
+        对于不支持视觉的 Provider：
+        - 如果 enable_vision=True（如投喂功能）：使用 Ollama Vision 将图片转换为文字描述
+        - 如果 enable_vision=False（如普通对话）：直接用占位符替换图片，不进行视觉转译
 
         Args:
             messages: 对话消息列表
             provider: 目标 Provider
-            **kwargs: 其他参数（可包含 vision_prompt 用于自定义图片描述提示词）
+            **kwargs: 其他参数
+                - enable_vision: 是否启用视觉转译（默认 False，仅投喂等特殊功能需要启用）
+                - vision_prompt: 自定义图片描述提示词
 
         Returns:
             处理后的消息列表
@@ -554,6 +558,9 @@ class AIService:
         # 如果 Provider 支持视觉，直接返回原消息
         if getattr(provider, "supports_vision", False):
             return messages
+
+        # 获取是否启用视觉转译参数（默认关闭以节省内存）
+        enable_vision = kwargs.get("enable_vision", False)
 
         # 检查消息中是否有图片内容
         # 支持两种格式：
@@ -578,12 +585,17 @@ class AIService:
         if not has_image:
             return messages
 
-        log.info(
-            "[AIService] 检测到图片内容，Provider 不支持视觉，使用 Ollama Vision 转换"
-        )
-
-        # 延迟导入避免循环依赖
-        from src.chat.services.ollama_vision_service import ollama_vision_service
+        # 根据 enable_vision 参数决定处理方式
+        if enable_vision:
+            log.info(
+                "[AIService] 检测到图片内容，Provider 不支持视觉，使用 Ollama Vision 转换"
+            )
+            # 延迟导入避免循环依赖
+            from src.chat.services.ollama_vision_service import ollama_vision_service
+        else:
+            log.info(
+                "[AIService] 检测到图片内容，Provider 不支持视觉，使用占位符替换（节省内存）"
+            )
 
         # 处理每条消息
         processed_messages = []
@@ -602,93 +614,127 @@ class AIService:
                             text_parts.append(part.get("text", ""))
                         elif part.get("type") == "image":
                             # 内部格式：直接使用 image_bytes
-                            image_bytes = part.get("image_bytes")
-                            mime_type = part.get("mime_type", "image/png")
+                            source = part.get("source", "unknown")
 
-                            if image_bytes:
-                                # 获取自定义提示词或使用默认
-                                vision_prompt = kwargs.get("vision_prompt")
-                                try:
-                                    if vision_prompt:
-                                        description = (
-                                            await ollama_vision_service.describe_image(
+                            if enable_vision:
+                                image_bytes = part.get("image_bytes")
+                                mime_type = part.get("mime_type", "image/png")
+
+                                if image_bytes:
+                                    # 获取自定义提示词或使用默认
+                                    vision_prompt = kwargs.get("vision_prompt")
+                                    try:
+                                        if vision_prompt:
+                                            description = await ollama_vision_service.describe_image(
                                                 image_bytes, vision_prompt, mime_type
                                             )
-                                        )
-                                    else:
-                                        description = (
-                                            await ollama_vision_service.describe_image(
+                                        else:
+                                            description = await ollama_vision_service.describe_image(
                                                 image_bytes,
                                                 "请用中文描述这张图片的内容。",
                                                 mime_type,
                                             )
-                                        )
 
-                                    if description:
+                                        if description:
+                                            image_descriptions.append(
+                                                f"[图片内容: {description}]"
+                                            )
+                                            log.debug(
+                                                f"图片描述: {description[:100]}..."
+                                            )
+                                        else:
+                                            image_descriptions.append(
+                                                "[图片内容: 无法识别]"
+                                            )
+                                    except Exception as e:
+                                        log.error(f"Ollama Vision 处理图片失败: {e}")
                                         image_descriptions.append(
-                                            f"[图片内容: {description}]"
+                                            "[图片内容: 处理失败]"
                                         )
-                                        log.debug(f"图片描述: {description[:100]}...")
-                                    else:
-                                        image_descriptions.append(
-                                            "[图片内容: 无法识别]"
-                                        )
-                                except Exception as e:
-                                    log.error(f"Ollama Vision 处理图片失败: {e}")
-                                    image_descriptions.append("[图片内容: 处理失败]")
+                            else:
+                                # 不启用视觉转译时，根据 source 进行不同处理
+                                if source == "emoji":
+                                    # 表情包：直接过滤，不添加任何占位符
+                                    pass
+                                elif source == "sticker":
+                                    # 贴纸：直接过滤，不添加任何占位符
+                                    pass
+                                else:
+                                    # 附件图片：替换为占位符
+                                    image_descriptions.append(
+                                        "[图片: 当前类脑娘无法识别]"
+                                    )
 
                         elif part.get("type") == "image_url":
                             # OpenAI 格式：从 data URL 中提取 base64 图片
-                            import base64
+                            source = part.get("source", "unknown")
 
-                            image_url_data = part.get("image_url", {})
-                            url = image_url_data.get("url", "")
+                            if enable_vision:
+                                import base64
 
-                            if url.startswith("data:"):
-                                # 解析 data URL: data:image/png;base64,xxxxx
-                                try:
-                                    # 提取 MIME 类型和 base64 数据
-                                    header, base64_data = url.split(",", 1)
-                                    # header 格式: data:image/png;base64
-                                    mime_match = header.split(":")[1].split(";")[0]
-                                    mime_type = (
-                                        mime_match
-                                        if mime_match.startswith("image/")
-                                        else "image/png"
-                                    )
+                                image_url_data = part.get("image_url", {})
+                                url = image_url_data.get("url", "")
 
-                                    # 解码 base64
-                                    image_bytes = base64.b64decode(base64_data)
+                                if url.startswith("data:"):
+                                    # 解析 data URL: data:image/png;base64,xxxxx
+                                    try:
+                                        # 提取 MIME 类型和 base64 数据
+                                        header, base64_data = url.split(",", 1)
+                                        # header 格式: data:image/png;base64
+                                        mime_match = header.split(":")[1].split(";")[0]
+                                        mime_type = (
+                                            mime_match
+                                            if mime_match.startswith("image/")
+                                            else "image/png"
+                                        )
 
-                                    # 获取自定义提示词或使用默认
-                                    vision_prompt = kwargs.get("vision_prompt")
-                                    if vision_prompt:
-                                        description = (
-                                            await ollama_vision_service.describe_image(
+                                        # 解码 base64
+                                        image_bytes = base64.b64decode(base64_data)
+
+                                        # 获取自定义提示词或使用默认
+                                        vision_prompt = kwargs.get("vision_prompt")
+                                        if vision_prompt:
+                                            description = await ollama_vision_service.describe_image(
                                                 image_bytes, vision_prompt, mime_type
                                             )
-                                        )
-                                    else:
-                                        description = (
-                                            await ollama_vision_service.describe_image(
+                                        else:
+                                            description = await ollama_vision_service.describe_image(
                                                 image_bytes,
                                                 "请用中文描述这张图片的内容。",
                                                 mime_type,
                                             )
-                                        )
 
-                                    if description:
-                                        image_descriptions.append(
-                                            f"[图片内容: {description}]"
+                                        if description:
+                                            image_descriptions.append(
+                                                f"[图片内容: {description}]"
+                                            )
+                                            log.debug(
+                                                f"图片描述: {description[:100]}..."
+                                            )
+                                        else:
+                                            image_descriptions.append(
+                                                "[图片内容: 无法识别]"
+                                            )
+                                    except Exception as e:
+                                        log.error(
+                                            f"解析或处理 OpenAI 格式图片失败: {e}"
                                         )
-                                        log.debug(f"图片描述: {description[:100]}...")
-                                    else:
                                         image_descriptions.append(
-                                            "[图片内容: 无法识别]"
+                                            "[图片内容: 处理失败]"
                                         )
-                                except Exception as e:
-                                    log.error(f"解析或处理 OpenAI 格式图片失败: {e}")
-                                    image_descriptions.append("[图片内容: 处理失败]")
+                            else:
+                                # 不启用视觉转译时，根据 source 进行不同处理
+                                if source == "emoji":
+                                    # 表情包：直接过滤，不添加任何占位符
+                                    pass
+                                elif source == "sticker":
+                                    # 贴纸：直接过滤，不添加任何占位符
+                                    pass
+                                else:
+                                    # 附件图片：替换为占位符
+                                    image_descriptions.append(
+                                        "[图片: 当前类脑娘无法识别]"
+                                    )
 
                 # 合并文本和图片描述
                 final_text = "\n".join(text_parts)

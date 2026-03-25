@@ -503,14 +503,15 @@ class PromptService:
                 if text_segment:
                     processed_parts.append(text_segment)
 
-                # 2. 添加表情图片
+                # 2. 添加表情图片（携带 source 信息）
                 emoji_name = match.group(1)
                 if emoji_name in emoji_map:
                     try:
                         pil_image = Image.open(
                             io.BytesIO(emoji_map[emoji_name]["data"])
                         )
-                        processed_parts.append(pil_image)
+                        # 使用字典格式携带 source 信息
+                        processed_parts.append({"image": pil_image, "source": "emoji"})
                     except Exception as e:
                         log.error(f"Pillow 无法打开表情图片 {emoji_name}。错误: {e}。")
 
@@ -562,21 +563,21 @@ class PromptService:
         if not message and (sticker_images or attachment_images):
             current_user_parts.append(f"用户名:{user_name}, 用户消息:(图片消息)")
 
-        # 追加所有贴纸图片到末尾
+        # 追加所有贴纸图片到末尾（携带 source 信息）
         for img_data in sticker_images:
             try:
                 pil_image = Image.open(io.BytesIO(img_data["data"]))
-                current_user_parts.append(pil_image)
+                current_user_parts.append({"image": pil_image, "source": "sticker"})
             except Exception as e:
                 log.error(
                     f"Pillow 无法打开贴纸图片 {img_data.get('name', 'unknown')}。错误: {e}。"
                 )
 
-        # 追加所有附件图片到末尾
+        # 追加所有附件图片到末尾（携带 source 信息）
         for img_data in attachment_images:
             try:
                 pil_image = Image.open(io.BytesIO(img_data["data"]))
-                current_user_parts.append(pil_image)
+                current_user_parts.append({"image": pil_image, "source": "attachment"})
             except Exception as e:
                 log.error(f"Pillow 无法打开附件图片。错误: {e}。")
 
@@ -648,8 +649,17 @@ class PromptService:
             if content is None and "parts" in msg:
                 parts = msg["parts"]
                 if isinstance(parts, list):
-                    # 检查是否有 PIL Image 对象
-                    has_pil_image = any(isinstance(part, Image.Image) for part in parts)
+                    # 检查是否有 PIL Image 对象（包括字典格式中的 PIL Image）
+                    def has_image(part):
+                        if isinstance(part, Image.Image):
+                            return True
+                        if isinstance(part, dict) and isinstance(
+                            part.get("image"), Image.Image
+                        ):
+                            return True
+                        return False
+
+                    has_pil_image = any(has_image(part) for part in parts)
 
                     if has_pil_image:
                         # 使用多模态格式
@@ -662,7 +672,7 @@ class PromptService:
                                     {"type": "text", "text": part["text"]}
                                 )
                             elif isinstance(part, Image.Image):
-                                # 将 PIL Image 转换为 base64
+                                # 将 PIL Image 转换为 base64（旧格式兼容）
                                 try:
                                     image_base64, mime_type = self._pil_image_to_base64(
                                         part
@@ -673,10 +683,35 @@ class PromptService:
                                             "image_url": {
                                                 "url": f"data:{mime_type};base64,{image_base64}"
                                             },
+                                            "source": "unknown",  # 旧格式无 source 信息
                                         }
                                     )
                                     log.debug(
                                         f"已将 PIL Image 转换为 base64，MIME 类型: {mime_type}"
+                                    )
+                                except Exception as e:
+                                    log.error(f"转换 PIL Image 到 base64 失败: {e}")
+                            elif isinstance(part, dict) and isinstance(
+                                part.get("image"), Image.Image
+                            ):
+                                # 新格式：字典中包含 PIL Image 和 source 信息
+                                pil_image = part["image"]
+                                source = part.get("source", "unknown")
+                                try:
+                                    image_base64, mime_type = self._pil_image_to_base64(
+                                        pil_image
+                                    )
+                                    content_parts.append(
+                                        {
+                                            "type": "image_url",
+                                            "image_url": {
+                                                "url": f"data:{mime_type};base64,{image_base64}"
+                                            },
+                                            "source": source,
+                                        }
+                                    )
+                                    log.debug(
+                                        f"已将 PIL Image 转换为 base64，MIME 类型: {mime_type}，来源: {source}"
                                     )
                                 except Exception as e:
                                     log.error(f"转换 PIL Image 到 base64 失败: {e}")
