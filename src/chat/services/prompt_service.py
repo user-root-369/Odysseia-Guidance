@@ -26,11 +26,46 @@ class PromptService:
     采用分层注入式结构，动态解析并构建对话历史。
     """
 
+    # 缓存优化模型列表 - 这些模型默认使用上下文缓存优化的构建顺序
+    # 注意：实际使用时会优先读取模型配置中的 use_cache_optimized_build 字段
+    # 此列表仅作为默认值参考
+    DEFAULT_CACHE_OPTIMIZED_PROVIDERS = {
+        "deepseek",  # DeepSeek 系列模型默认启用缓存优化
+    }
+
     def __init__(self):
         """
         初始化 PromptService。
         """
         pass
+
+    def _should_use_cache_optimized_build(self, model_name: Optional[str]) -> bool:
+        """
+        判断是否应该使用缓存优化的构建策略
+
+        优先级：
+        1. 模型配置中的 use_cache_optimized_build 字段（如果明确设置）
+        2. 根据 provider 默认判断（deepseek 默认启用）
+
+        Args:
+            model_name: 模型名称
+
+        Returns:
+            bool: 是否使用缓存优化构建
+        """
+        if not model_name:
+            return False
+
+        from src.chat.config.model_params import get_model_params
+
+        model_params = get_model_params(model_name)
+
+        # 如果配置中明确设置了 use_cache_optimized_build，使用配置值
+        if model_params.use_cache_optimized_build is not None:
+            return model_params.use_cache_optimized_build
+
+        # 否则根据 provider 判断
+        return model_params.provider in self.DEFAULT_CACHE_OPTIMIZED_PROVIDERS
 
     @staticmethod
     def _pil_image_to_base64(pil_image: Image.Image) -> tuple[str, str]:
@@ -201,8 +236,78 @@ class PromptService:
     ) -> List[Dict[str, Any]]:
         """
         构建用于AI聊天的分层对话历史。
+
+        根据模型类型自动选择最优的构建策略：
+        - 配置了 use_cache_optimized_build=true 的模型：使用缓存优化顺序
+        - DeepSeek 系列模型（默认）：使用缓存优化顺序，最大化上下文缓存命中率
+        - 其他模型：使用默认构建顺序
+
         此方法将单一的系统提示动态拆分为多个部分，并按顺序注入到对话历史中，
         形成一个结构化的、引导式的上下文，以提高AI的稳定性和可控性。
+        """
+        # 根据模型配置选择构建策略
+        if self._should_use_cache_optimized_build(model_name):
+            log.info(f"模型 {model_name} 使用缓存优化构建策略")
+            return await self._build_chat_prompt_cache_optimized(
+                user_name=user_name,
+                message=message,
+                replied_message=replied_message,
+                images=images,
+                channel_context=channel_context,
+                world_book_entries=world_book_entries,
+                affection_status=affection_status,
+                guild_name=guild_name,
+                location_name=location_name,
+                personal_summary=personal_summary,
+                user_profile_data=user_profile_data,
+                model_name=model_name,
+                channel=channel,
+                conversation_memory=conversation_memory,
+                latest_block=latest_block,
+                output_format=output_format,
+            )
+        else:
+            return await self._build_chat_prompt_default(
+                user_name=user_name,
+                message=message,
+                replied_message=replied_message,
+                images=images,
+                channel_context=channel_context,
+                world_book_entries=world_book_entries,
+                affection_status=affection_status,
+                guild_name=guild_name,
+                location_name=location_name,
+                personal_summary=personal_summary,
+                user_profile_data=user_profile_data,
+                model_name=model_name,
+                channel=channel,
+                conversation_memory=conversation_memory,
+                latest_block=latest_block,
+                output_format=output_format,
+            )
+
+    async def _build_chat_prompt_default(
+        self,
+        user_name: str,
+        message: Optional[str],
+        replied_message: Optional[str],
+        images: Optional[List[Dict]],
+        channel_context: Optional[List[Dict]],
+        world_book_entries: Optional[List[Dict]],
+        affection_status: Optional[Dict[str, Any]],
+        guild_name: str,
+        location_name: str,
+        personal_summary: Optional[str] = None,
+        user_profile_data: Optional[Dict[str, Any]] = None,
+        model_name: Optional[str] = None,
+        channel: Optional[Any] = None,
+        conversation_memory: Optional[str] = None,
+        latest_block: Optional[Dict[str, Any]] = None,
+        output_format: str = "gemini",
+    ) -> List[Dict[str, Any]]:
+        """
+        默认的对话历史构建方法。
+        保持原有的消息顺序，用于非缓存优化模型。
         """
         final_conversation = []
 
@@ -408,7 +513,7 @@ class PromptService:
                 {
                     "role": "user",
                     "parts": [
-                        f'<attitude_and_background user="{user_name}">\n这是关于 {user_name} 的一些背景信息，你在与ta互动时应该了解这些，除非涉及,不要在对话中直接引用这些信息，。\n{combined_prompt}\n</attitude_and_background>'
+                        f'<attitude_and_background user="{user_name}">\n这是关于 {user_name} 的一些背景信息，你在与ta互动时应该了解这些，除非涉及,不要在对话中直接引用这些信息\n{combined_prompt}\n</attitude_and_background>'
                     ],
                 }
             )
@@ -637,6 +742,440 @@ class PromptService:
             )
 
         # 根据输出格式要求进行转换
+        if output_format == "openai":
+            final_conversation = self._convert_messages_to_openai_format(
+                final_conversation
+            )
+
+        return final_conversation
+
+    async def _build_chat_prompt_cache_optimized(
+        self,
+        user_name: str,
+        message: Optional[str],
+        replied_message: Optional[str],
+        images: Optional[List[Dict]],
+        channel_context: Optional[List[Dict]],
+        world_book_entries: Optional[List[Dict]],
+        affection_status: Optional[Dict[str, Any]],
+        guild_name: str,
+        location_name: str,
+        personal_summary: Optional[str] = None,
+        user_profile_data: Optional[Dict[str, Any]] = None,
+        model_name: Optional[str] = None,
+        channel: Optional[Any] = None,
+        conversation_memory: Optional[str] = None,
+        latest_block: Optional[Dict[str, Any]] = None,
+        output_format: str = "gemini",
+    ) -> List[Dict[str, Any]]:
+        """
+        针对上下文缓存优化的对话历史构建方法。
+
+        消息顺序优化策略（从前往后，稳定的内容放前面）：
+        1. 越狱提示词（固定）← 缓存锚点
+        2. 核心人设（固定）← 缓存锚点
+        3. 帖子首楼（帖子内固定）
+        4. 好感度+用户档案（几乎不变）
+        5. 个人印象（很少变化）
+        6. 频道历史上下文（相对稳定，append-only）
+        7. 回复上下文（偶尔有）
+        8. 世界之书 RAG（每次不同）
+        9. RAG对话记忆+最新对话块（每次不同）
+        10. 最终指令（固定模板，在最后）
+        11. 当前用户输入（每次不同）
+
+        这样前5层在同一用户对话时可以100%命中缓存。
+        """
+        final_conversation = []
+
+        # --- 帖子首楼注入（提前处理，但稍后注入）---
+        thread_first_post = None
+        if channel and message:
+            from src.chat.services.message_processor import detect_bot_location
+
+            location_info = detect_bot_location(channel)
+            bot_user_id = (
+                channel.guild.me.id
+                if hasattr(channel, "guild") and channel.guild
+                else None
+            )
+
+            if location_info["is_thread"] and bot_user_id:
+                try:
+                    thread = channel
+                    if thread.starter_message:
+                        first_message = thread.starter_message
+                    else:
+                        first_message = await thread.fetch_message(thread.id)
+
+                    if first_message and first_message.content:
+                        author_name = "未知作者"
+                        if thread.owner:
+                            author_name = thread.owner.display_name
+                        elif thread.owner_id:
+                            try:
+                                owner = await thread.guild.fetch_member(thread.owner_id)
+                                author_name = owner.display_name
+                            except discord.NotFound:
+                                pass
+
+                        starter_content = first_message.content
+                        thread_title = thread.name
+                        tags = (
+                            ", ".join([tag.name for tag in thread.applied_tags])
+                            if thread.applied_tags
+                            else "无"
+                        )
+
+                        thread_first_post = f"""<thread_first_post>
+帖子标题: {thread_title}
+发帖人: {author_name}
+标签: {tags}
+首楼内容:
+{starter_content}
+</thread_first_post>"""
+                except Exception as e:
+                    log.warning(f"获取帖子首楼内容失败: {e}")
+
+        # --- 时间准备 ---
+        beijing_tz = timezone(timedelta(hours=8))
+        current_beijing_time = datetime.now(beijing_tz).strftime("%Y年%m月%d日 %H:%M")
+
+        # ============================================
+        # 第一层：绝对固定的缓存锚点
+        # ============================================
+
+        # 1. 越狱提示词
+        jailbreak_user = self._get_model_specific_prompt(
+            model_name, "JAILBREAK_USER_PROMPT"
+        )
+        jailbreak_model = self._get_model_specific_prompt(
+            model_name, "JAILBREAK_MODEL_RESPONSE"
+        )
+        if jailbreak_user and jailbreak_model:
+            final_conversation.append({"role": "user", "parts": [jailbreak_user]})
+            final_conversation.append({"role": "model", "parts": [jailbreak_model]})
+
+        # 2. 核心人设
+        core_prompt_template = self.get_prompt("SYSTEM_PROMPT", model_name=model_name)
+        final_conversation.append({"role": "user", "parts": [core_prompt_template]})
+        final_conversation.append({"role": "model", "parts": ["我在线啦，随时开聊！"]})
+
+        # 3. 帖子首楼（如果有）
+        if thread_first_post:
+            final_conversation.append({"role": "user", "parts": [thread_first_post]})
+            final_conversation.append({"role": "model", "parts": ["了解了"]})
+            log.info("已将帖子首楼内容注入到人设之后")
+
+        # ============================================
+        # 第二层：几乎不变的内容（用户相关）
+        # ============================================
+
+        # 4. 好感度+用户档案
+        affection_prompt = (
+            affection_status.get("prompt", "").replace("用户", user_name)
+            if affection_status
+            else ""
+        )
+
+        user_profile_prompt = ""
+        if user_profile_data:
+            source_data = {}
+            source_metadata = user_profile_data.get("source_metadata")
+            if isinstance(source_metadata, dict):
+                content_json_str = source_metadata.get("content_json")
+                if isinstance(content_json_str, str):
+                    try:
+                        source_data.update(json.loads(content_json_str))
+                    except json.JSONDecodeError:
+                        log.warning(
+                            f"解析用户档案 'content_json' 失败: {content_json_str}"
+                        )
+                for key in ["name", "personality", "background", "preferences"]:
+                    if key in source_metadata and source_metadata[key]:
+                        source_data[key] = source_metadata[key]
+
+            source_data.update(user_profile_data)
+
+            profile_map = {
+                "名称": source_data.get("title") or source_data.get("name"),
+                "个性": source_data.get("personality"),
+                "背景": source_data.get("background"),
+                "偏好": source_data.get("preferences"),
+            }
+
+            profile_details = []
+            for display_name, value in profile_map.items():
+                if not value or value == "未提供":
+                    continue
+                if display_name == "背景" and isinstance(value, str):
+                    value = value.replace("\\n", "\n").replace('\\"', '"').strip()
+                profile_details.append(f"{display_name}: {value}")
+
+            if profile_details:
+                user_profile_prompt = "\n" + "\n".join(profile_details)
+
+        if affection_prompt or user_profile_prompt:
+            attitude_part = f"态度: {affection_prompt}\n" if affection_prompt else ""
+            combined_prompt = f"{attitude_part}{user_profile_prompt.lstrip()}".strip()
+            final_conversation.append(
+                {
+                    "role": "user",
+                    "parts": [
+                        f'<attitude_and_background user="{user_name}">\n这是关于 {user_name} 的一些背景信息，你在与ta互动时应该了解这些，除非涉及,不要在对话中直接引用这些信息\n{combined_prompt}\n</attitude_and_background>'
+                    ],
+                }
+            )
+            final_conversation.append({"role": "model", "parts": ["这事我知道了"]})
+
+        # 5. 个人印象（单独注入）
+        if personal_summary:
+            personal_memory_content = f"<personal_memory>\n这是关于 {user_name} ,你对ta的印象：\n{personal_summary}\n</personal_memory>"
+            final_conversation.append(
+                {"role": "user", "parts": [personal_memory_content]}
+            )
+            final_conversation.append({"role": "model", "parts": ["我记得ta。"]})
+            log.debug("已注入个人印象（缓存优化位置）")
+
+        # ============================================
+        # 第三层：相对稳定的内容（频道相关）
+        # ============================================
+
+        # 6. 频道历史上下文
+        if channel_context:
+            final_conversation.extend(channel_context)
+            log.debug(f"已合并频道上下文，长度为: {len(channel_context)}")
+
+        # 7. 回复上下文
+        if replied_message:
+            reply_injection_prompt = f"上下文提示：{user_name} 正在进行回复操作。以下是ta正在回复的原始消息内容和作者：\n{replied_message}"
+            final_conversation.append(
+                {"role": "user", "parts": [reply_injection_prompt]}
+            )
+            final_conversation.append({"role": "model", "parts": ["收到"]})
+            log.debug("已在频道历史后注入回复消息上下文。")
+
+        # ============================================
+        # 第四层：动态内容（每次不同）
+        # ============================================
+
+        # 8. 世界之书 RAG
+        world_book_formatted_content = self._format_world_book_entries(
+            world_book_entries, user_name
+        )
+        if world_book_formatted_content:
+            final_conversation.append(
+                {"role": "user", "parts": [world_book_formatted_content]}
+            )
+            final_conversation.append({"role": "model", "parts": ["我想起来了。"]})
+
+        # 9. RAG对话记忆+最新对话块（合并注入）
+        dynamic_memory_parts = []
+        if conversation_memory:
+            dynamic_memory_parts.append(
+                f"<conversation_memory>\n以下是你与 {user_name} 之前的一些对话片段：\n{conversation_memory}\n</conversation_memory>"
+            )
+        if latest_block:
+            time_desc = latest_block.get("time_description", "最近")
+            conversation_text = latest_block.get("conversation_text", "")
+            dynamic_memory_parts.append(
+                f"<latest_conversation>\n以下是你与 {user_name} 在 {time_desc} 的对话记录：\n{conversation_text}\n</latest_conversation>"
+            )
+
+        if dynamic_memory_parts:
+            combined_dynamic_memory = "\n\n".join(dynamic_memory_parts)
+            final_conversation.append(
+                {"role": "user", "parts": [combined_dynamic_memory]}
+            )
+            final_conversation.append({"role": "model", "parts": ["嗯，我记得这些。"]})
+            log.debug(
+                f"已注入动态记忆: RAG={bool(conversation_memory)}, 最新块={bool(latest_block)}"
+            )
+
+        # ============================================
+        # 第五层：最终指令 + 用户输入
+        # ============================================
+
+        # 10. 最终指令注入（合并到最后一条 model 消息）
+        last_model_message_index = -1
+        for i in range(len(final_conversation) - 1, -1, -1):
+            if final_conversation[i].get("role") == "model":
+                last_model_message_index = i
+                break
+
+        if last_model_message_index != -1:
+            final_instruction_template = self._get_model_specific_prompt(
+                model_name, "JAILBREAK_FINAL_INSTRUCTION"
+            )
+            if not final_instruction_template:
+                log.error(
+                    f"未能为模型 '{model_name}' 找到 JAILBREAK_FINAL_INSTRUCTION。"
+                )
+                final_injection_content = ""
+            else:
+                final_injection_content = final_instruction_template.format(
+                    guild_name=guild_name,
+                    location_name=location_name,
+                    current_time=current_beijing_time,
+                )
+
+            is_already_injected = False
+            if "parts" not in final_conversation[
+                last_model_message_index
+            ] or not isinstance(
+                final_conversation[last_model_message_index]["parts"], list
+            ):
+                final_conversation[last_model_message_index]["parts"] = []
+
+            for part in final_conversation[last_model_message_index]["parts"]:
+                part_text = ""
+                if isinstance(part, str):
+                    part_text = part
+                elif isinstance(part, dict) and "text" in part:
+                    part_text = part["text"]
+
+                if "<system_info>" in part_text:
+                    is_already_injected = True
+                    break
+
+            if not is_already_injected:
+                found_text_part = False
+                for part in final_conversation[last_model_message_index]["parts"]:
+                    if isinstance(part, str):
+                        part_index = final_conversation[last_model_message_index][
+                            "parts"
+                        ].index(part)
+                        final_conversation[last_model_message_index]["parts"][
+                            part_index
+                        ] = f"{part}\n\n{final_injection_content}"
+                        found_text_part = True
+                        break
+                    elif isinstance(part, dict) and "text" in part:
+                        part["text"] += f"\n\n{final_injection_content}"
+                        found_text_part = True
+                        break
+
+                if not found_text_part:
+                    final_conversation[last_model_message_index]["parts"].append(
+                        final_injection_content
+                    )
+
+                log.debug("已将最终指令合并到最后一条 'model' 消息中（缓存优化）。")
+            else:
+                log.debug("最终指令已存在于历史消息中，跳过注入以防止重复。")
+
+        # 11. 当前用户输入注入
+        current_user_parts = []
+
+        emoji_map = (
+            {img["name"]: img for img in images if img.get("source") == "emoji"}
+            if images
+            else {}
+        )
+        sticker_images = (
+            [img for img in images if img.get("source") == "sticker"] if images else []
+        )
+        attachment_images = (
+            [img for img in images if img.get("source") == "attachment"]
+            if images
+            else []
+        )
+
+        if message:
+            last_end = 0
+            processed_parts = []
+
+            for match in EMOJI_PLACEHOLDER_REGEX.finditer(message):
+                text_segment = message[last_end : match.start()]
+                if text_segment:
+                    processed_parts.append(text_segment)
+
+                emoji_name = match.group(1)
+                if emoji_name in emoji_map:
+                    try:
+                        pil_image = Image.open(
+                            io.BytesIO(emoji_map[emoji_name]["data"])
+                        )
+                        processed_parts.append({"image": pil_image, "source": "emoji"})
+                    except Exception as e:
+                        log.error(f"Pillow 无法打开表情图片 {emoji_name}。错误: {e}。")
+
+                last_end = match.end()
+
+            remaining_text = message[last_end:]
+            if remaining_text:
+                processed_parts.append(remaining_text)
+
+            if processed_parts:
+                first_text_index = -1
+                for i, part in enumerate(processed_parts):
+                    if isinstance(part, str):
+                        first_text_index = i
+                        break
+
+                if first_text_index != -1 and isinstance(
+                    processed_parts[first_text_index], str
+                ):
+                    original_message = processed_parts[first_text_index]
+
+                    if "\n" in original_message:
+                        lines = original_message.split("\n\n", 1)
+                        if len(lines) == 2:
+                            formatted_message = (
+                                f"{lines[0]}\n\n[{user_name}]:{lines[1]}"
+                            )
+                        else:
+                            formatted_message = f"[{user_name}]: {original_message}"
+                    else:
+                        formatted_message = f"[{user_name}]: {original_message}"
+
+                    processed_parts[first_text_index] = formatted_message
+
+            current_user_parts.extend(processed_parts)
+
+        if not message and (sticker_images or attachment_images):
+            current_user_parts.append(f"用户名:{user_name}, 用户消息:(图片消息)")
+
+        for img_data in sticker_images:
+            try:
+                pil_image = Image.open(io.BytesIO(img_data["data"]))
+                current_user_parts.append({"image": pil_image, "source": "sticker"})
+            except Exception as e:
+                log.error(
+                    f"Pillow 无法打开贴纸图片 {img_data.get('name', 'unknown')}。错误: {e}。"
+                )
+
+        for img_data in attachment_images:
+            try:
+                pil_image = Image.open(io.BytesIO(img_data["data"]))
+                current_user_parts.append({"image": pil_image, "source": "attachment"})
+            except Exception as e:
+                log.error(f"Pillow 无法打开附件图片。错误: {e}。")
+
+        if current_user_parts:
+            from src.chat.services.context_service import context_service
+
+            guild = channel.guild if channel and hasattr(channel, "guild") else None
+            cleaned_user_parts = []
+            for part in current_user_parts:
+                if isinstance(part, str):
+                    cleaned_user_parts.append(
+                        context_service.clean_message_content(part, guild)
+                    )
+                else:
+                    cleaned_user_parts.append(part)
+
+            if final_conversation and final_conversation[-1].get("role") == "user":
+                final_conversation[-1]["parts"].extend(cleaned_user_parts)
+                log.debug("将当前用户输入合并到上一条 'user' 消息中。")
+            else:
+                final_conversation.append({"role": "user", "parts": cleaned_user_parts})
+
+        if chat_config.DEBUG_CONFIG["LOG_FINAL_CONTEXT"]:
+            log.debug(
+                f"发送给AI的最终提示词（缓存优化）: {json.dumps(final_conversation, ensure_ascii=False, indent=2)}"
+            )
+
         if output_format == "openai":
             final_conversation = self._convert_messages_to_openai_format(
                 final_conversation

@@ -398,12 +398,31 @@ class ModelParamsView(View):
             prompt_button.callback = self._on_edit_prompt
             self.add_item(prompt_button)
 
+            # 缓存优化构建开关按钮
+            current_params = self.model_params.get(self.selected_model)
+            cache_enabled = (
+                current_params.use_cache_optimized_build
+                if current_params
+                and current_params.use_cache_optimized_build is not None
+                else (
+                    current_params.provider == "deepseek" if current_params else False
+                )
+            )
+            cache_button = Button(
+                label=f"⚡ 缓存优化: {'✅ 开' if cache_enabled else '❌ 关'}",
+                style=ButtonStyle.success if cache_enabled else ButtonStyle.secondary,
+                custom_id="toggle_cache_optimized",
+                row=2,
+            )
+            cache_button.callback = self._on_toggle_cache_optimized
+            self.add_item(cache_button)
+
             # 重置参数按钮
             reset_button = Button(
                 label="🔄 重置为默认",
                 style=ButtonStyle.danger,
                 custom_id="reset_params",
-                row=2,
+                row=3,
             )
             reset_button.callback = self._on_reset_params
             self.add_item(reset_button)
@@ -447,6 +466,15 @@ class ModelParamsView(View):
                 else "未设置"
             )
             lines.append(f"**Frequency Penalty:** {frequency}")
+
+        # 显示缓存优化构建状态
+        cache_enabled = (
+            params.use_cache_optimized_build
+            if params.use_cache_optimized_build is not None
+            else (params.provider == "deepseek")
+        )
+        cache_status = "✅ 开启" if cache_enabled else "❌ 关闭"
+        lines.append(f"**缓存优化构建:** {cache_status}")
 
         # 显示提示词状态
         prompt_statuses = []
@@ -659,6 +687,57 @@ class ModelParamsView(View):
             await interaction.response.send_message(
                 f"✅ 已将 **{model_name}** 的所有提示词重置为默认", ephemeral=True
             )
+
+        # 刷新视图
+        self._create_view_items()
+        if self.message:
+            await self.message.edit(embed=self._get_params_embed(), view=self)
+
+    async def _on_toggle_cache_optimized(self, interaction: Interaction):
+        """切换缓存优化构建模式回调"""
+        if not self.selected_model:
+            await interaction.response.send_message("请先选择一个模型", ephemeral=True)
+            return
+
+        current_params = self.model_params.get(self.selected_model)
+        if current_params is None:
+            current_params = ModelParams(provider="default")
+
+        # 切换状态
+        current_enabled = (
+            current_params.use_cache_optimized_build
+            if current_params.use_cache_optimized_build is not None
+            else (current_params.provider == "deepseek")
+        )
+        new_enabled = not current_enabled
+
+        # 保存到配置
+        await chat_settings_service.set_model_params(
+            model_name=self.selected_model,
+            temperature=current_params.temperature,
+            top_p=current_params.top_p,
+            top_k=current_params.top_k,
+            max_output_tokens=current_params.max_output_tokens,
+            presence_penalty=current_params.presence_penalty,
+            frequency_penalty=current_params.frequency_penalty,
+            thinking_budget_tokens=current_params.thinking_budget_tokens,
+            system_prompt=current_params.system_prompt,
+            jailbreak_user_prompt=current_params.jailbreak_user_prompt,
+            jailbreak_model_response=current_params.jailbreak_model_response,
+            jailbreak_final_instruction=current_params.jailbreak_final_instruction,
+            provider=current_params.provider,
+            use_cache_optimized_build=new_enabled,
+        )
+
+        # 更新本地缓存
+        current_params.use_cache_optimized_build = new_enabled
+        self.model_params[self.selected_model] = current_params
+
+        status_text = "开启" if new_enabled else "关闭"
+        await interaction.response.send_message(
+            f"✅ 已为 **{self.selected_model}** {status_text}缓存优化构建模式",
+            ephemeral=True,
+        )
 
         # 刷新视图
         self._create_view_items()

@@ -88,6 +88,7 @@ class ModelParams:
         jailbreak_model_response: 自定义越狱模型响应 (None 表示使用默认)
         jailbreak_final_instruction: 自定义最终指令 (None 表示使用默认)
         provider: 模型提供商，用于确定支持的参数
+        use_cache_optimized_build: 是否使用缓存优化的 prompt 构建顺序 (None 表示根据 provider 自动判断)
     """
 
     temperature: float = 1.0
@@ -103,6 +104,8 @@ class ModelParams:
     jailbreak_model_response: Optional[str] = None
     jailbreak_final_instruction: Optional[str] = None
     provider: str = "default"  # 用于确定支持的参数
+    # 缓存优化构建配置 (None 表示根据 provider 自动判断)
+    use_cache_optimized_build: Optional[bool] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典格式，只包含非 None 的值"""
@@ -128,6 +131,8 @@ class ModelParams:
             result["jailbreak_model_response"] = self.jailbreak_model_response
         if self.jailbreak_final_instruction is not None:
             result["jailbreak_final_instruction"] = self.jailbreak_final_instruction
+        if self.use_cache_optimized_build is not None:
+            result["use_cache_optimized_build"] = self.use_cache_optimized_build
         return result
 
     @classmethod
@@ -146,6 +151,7 @@ class ModelParams:
             jailbreak_model_response=data.get("jailbreak_model_response"),
             jailbreak_final_instruction=data.get("jailbreak_final_instruction"),
             provider=data.get("provider", "default"),
+            use_cache_optimized_build=data.get("use_cache_optimized_build"),
         )
 
     def get_supported_params(self) -> List[SupportedParam]:
@@ -278,6 +284,7 @@ ORIGINAL_MODEL_PARAMS: Dict[str, ModelParams] = {
         jailbreak_model_response=params.jailbreak_model_response,
         jailbreak_final_instruction=params.jailbreak_final_instruction,
         provider=params.provider,
+        use_cache_optimized_build=params.use_cache_optimized_build,
     )
     for model, params in MODEL_PARAMS_CONFIG.items()
 }

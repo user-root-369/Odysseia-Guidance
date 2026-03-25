@@ -537,6 +537,7 @@ class ChatSettingsService:
         jailbreak_model_response: Optional[str] = None,
         jailbreak_final_instruction: Optional[str] = None,
         provider: Optional[str] = None,
+        use_cache_optimized_build: Optional[bool] = None,
     ) -> None:
         """
         设置指定模型的参数配置。
@@ -555,6 +556,7 @@ class ChatSettingsService:
             jailbreak_model_response: 自定义越狱模型响应 (None 表示使用默认)
             jailbreak_final_instruction: 自定义最终指令 (None 表示使用默认)
             provider: 模型提供商 (deepseek/gemini/openai/anthropic/default)
+            use_cache_optimized_build: 是否使用缓存优化的 prompt 构建顺序
         """
         from src.chat.config.model_params import (
             get_model_params,
@@ -597,6 +599,9 @@ class ChatSettingsService:
             if jailbreak_final_instruction is not None
             else current_params.jailbreak_final_instruction,
             provider=provider if provider is not None else current_params.provider,
+            use_cache_optimized_build=use_cache_optimized_build
+            if use_cache_optimized_build is not None
+            else current_params.use_cache_optimized_build,
         )
 
         update_model_params(model_name, new_params)
