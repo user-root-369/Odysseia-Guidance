@@ -73,7 +73,7 @@ class GenerationConfig:
 
     temperature: float = 1.0
     top_p: float = 0.95
-    top_k: int = 40
+    top_k: Optional[int] = None  # 仅 Gemini/Anthropic 支持，DeepSeek/OpenAI 不支持
     max_output_tokens: int = 6000
     presence_penalty: Optional[float] = None
     frequency_penalty: Optional[float] = None
@@ -83,12 +83,14 @@ class GenerationConfig:
 
     def to_gemini_config(self) -> Dict[str, Any]:
         """转换为 Gemini API 配置格式"""
-        config = {
+        config: Dict[str, Any] = {
             "temperature": self.temperature,
             "top_p": self.top_p,
-            "top_k": self.top_k,
             "max_output_tokens": self.max_output_tokens,
         }
+        # top_k 仅在设置时添加（Gemini/Anthropic 支持）
+        if self.top_k is not None:
+            config["top_k"] = self.top_k
         if self.stop_sequences:
             config["stop_sequences"] = self.stop_sequences
         if self.response_format:

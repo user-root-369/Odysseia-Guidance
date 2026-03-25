@@ -394,7 +394,7 @@ class PromptService:
         # --- 4. 回复上下文注入 (后置) ---
         if replied_message:
             # replied_message 已经包含了 "> [回复 xxx]:" 的头部和 markdown 引用格式
-            reply_injection_prompt = f"上下文提示：{user_name} 正在进行回复操作。以下是ta所回复的原始消息内容和作者：\n{replied_message}"
+            reply_injection_prompt = f"上下文提示：{user_name} 正在进行回复操作。以下是ta正在回复的原始消息内容和作者：\n{replied_message}"
             final_conversation.append(
                 {"role": "user", "parts": [reply_injection_prompt]}
             )

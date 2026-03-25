@@ -304,11 +304,17 @@ class ChatService:
                     user_id_for_settings=user_id_for_settings,
                 )
 
-            # 创建生成配置
+            # 创建生成配置（从配置文件获取模型参数）
+            from src.chat.config.model_params import get_model_params
+
+            model_params = get_model_params(current_model)
             generation_config = GenerationConfig(
-                temperature=1.0,
-                top_p=0.95,
-                max_output_tokens=8192,
+                temperature=model_params.temperature,
+                top_p=model_params.top_p,
+                top_k=model_params.top_k,
+                max_output_tokens=model_params.max_output_tokens,
+                presence_penalty=model_params.presence_penalty,
+                frequency_penalty=model_params.frequency_penalty,
             )
 
             # 调用 AIService

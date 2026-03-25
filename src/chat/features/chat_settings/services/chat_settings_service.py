@@ -1,8 +1,11 @@
 import discord
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from datetime import datetime, timedelta, timezone
 from src.chat.utils.database import chat_db_manager
 from src.chat.services.event_service import event_service
+
+if TYPE_CHECKING:
+    from src.chat.config.model_params import ModelParams
 
 
 class ChatSettingsService:
@@ -501,6 +504,102 @@ class ChatSettingsService:
                 )
 
         return result
+
+    # --- Model Parameters Settings ---
+
+    async def get_model_params(self, model_name: str) -> Dict[str, Any]:
+        """
+        获取指定模型的参数配置。
+
+        Args:
+            model_name: 模型名称
+
+        Returns:
+            Dict[str, Any]: 模型参数配置字典
+        """
+        from src.chat.config.model_params import get_model_params
+
+        params = get_model_params(model_name)
+        return params.to_dict()
+
+    async def set_model_params(
+        self,
+        model_name: str,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        top_k: Optional[int] = None,
+        max_output_tokens: Optional[int] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        provider: Optional[str] = None,
+    ) -> None:
+        """
+        设置指定模型的参数配置。
+
+        Args:
+            model_name: 模型名称
+            temperature: 温度参数 (0.0-2.0)
+            top_p: Top-p 采样参数 (0.0-1.0)
+            top_k: Top-k 采样参数 (仅 Gemini/Anthropic)
+            max_output_tokens: 最大输出 token 数
+            presence_penalty: 存在惩罚 (-2.0 to 2.0) (仅 DeepSeek/OpenAI)
+            frequency_penalty: 频率惩罚 (-2.0 to 2.0) (仅 DeepSeek/OpenAI)
+            provider: 模型提供商 (deepseek/gemini/openai/anthropic/default)
+        """
+        from src.chat.config.model_params import (
+            get_model_params,
+            update_model_params,
+            ModelParams,
+        )
+
+        # 获取当前配置
+        current_params = get_model_params(model_name)
+
+        # 更新非 None 的参数
+        new_params = ModelParams(
+            temperature=temperature
+            if temperature is not None
+            else current_params.temperature,
+            top_p=top_p if top_p is not None else current_params.top_p,
+            top_k=top_k if top_k is not None else current_params.top_k,
+            max_output_tokens=max_output_tokens
+            if max_output_tokens is not None
+            else current_params.max_output_tokens,
+            presence_penalty=presence_penalty
+            if presence_penalty is not None
+            else current_params.presence_penalty,
+            frequency_penalty=frequency_penalty
+            if frequency_penalty is not None
+            else current_params.frequency_penalty,
+            provider=provider if provider is not None else current_params.provider,
+        )
+
+        update_model_params(model_name, new_params)
+
+    async def get_all_model_params(self) -> Dict[str, "ModelParams"]:
+        """
+        获取所有模型的参数配置。
+
+        Returns:
+            Dict[str, ModelParams]: 模型名称到参数配置的映射
+        """
+        from src.chat.config.model_params import get_all_model_params
+
+        return get_all_model_params()
+
+    async def reset_model_params(self, model_name: str) -> bool:
+        """
+        重置指定模型的参数为原始配置值。
+
+        Args:
+            model_name: 模型名称
+
+        Returns:
+            bool: 是否成功重置
+        """
+        from src.chat.config.model_params import reset_to_original
+
+        return reset_to_original(model_name)
 
 
 # 单例实例

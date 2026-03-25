@@ -161,6 +161,16 @@ class ChatSettingsView(View):
             )
         )
 
+        # 第 3 行：模型参数设置
+        self.add_item(
+            Button(
+                label="🎛️ 模型参数",
+                style=ButtonStyle.secondary,
+                custom_id="model_params_settings",
+                row=3,
+            )
+        )
+
         # 第 4 行：Embedding 设置
         self.add_item(
             Button(
@@ -207,6 +217,8 @@ class ChatSettingsView(View):
             await self.on_embedding_settings(interaction)
         elif custom_id == "global_tools_settings":
             await self.on_global_tools_settings(interaction)
+        elif custom_id == "model_params_settings":
+            await self.on_model_params_settings(interaction)
 
         return True
 
@@ -379,5 +391,33 @@ class ChatSettingsView(View):
         embed = tools_view._create_embed()
         await interaction.edit_original_response(
             content=None, embed=embed, view=tools_view
+        )
+        self.stop()
+
+    async def on_model_params_settings(self, interaction: Interaction):
+        """切换到模型参数设置视图。"""
+        if not self.message:
+            await interaction.response.send_message(
+                "无法找到原始消息，请重新打开设置面板。", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer()
+        from src.chat.features.chat_settings.ui.model_params_view import ModelParamsView
+
+        async def back_callback(back_interaction: Interaction):
+            """返回主设置面板"""
+            await back_interaction.response.defer()
+            main_view = await ChatSettingsView.create(back_interaction)
+            main_view.message = self.message
+            await back_interaction.edit_original_response(
+                content=None, embed=None, view=main_view
+            )
+
+        model_params_view = await ModelParamsView.create(back_callback)
+        model_params_view.message = self.message
+        embed = model_params_view._get_params_embed()
+        await interaction.edit_original_response(
+            content=None, embed=embed, view=model_params_view
         )
         self.stop()

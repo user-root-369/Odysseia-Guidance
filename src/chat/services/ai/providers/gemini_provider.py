@@ -483,13 +483,16 @@ class GeminiProvider(BaseProvider):
         Returns:
             genai_types.GenerateContentConfig: Gemini 生成配置
         """
-        gen_config_params = {
+        gen_config_params: Dict[str, Any] = {
             "temperature": config.temperature,
             "top_p": config.top_p,
-            "top_k": config.top_k,
             "max_output_tokens": config.max_output_tokens,
             "safety_settings": self.safety_settings,
         }
+
+        # top_k 仅在设置时添加（Gemini 支持）
+        if config.top_k is not None:
+            gen_config_params["top_k"] = config.top_k
 
         if config.stop_sequences:
             gen_config_params["stop_sequences"] = config.stop_sequences
