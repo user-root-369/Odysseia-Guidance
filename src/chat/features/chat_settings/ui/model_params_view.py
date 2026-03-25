@@ -121,6 +121,26 @@ class ModelParamsModal(Modal):
         else:
             self.frequency_penalty_input = None
 
+        # 思考链 token 预算 - 仅 Gemini 支持
+        if SupportedParam.THINKING_BUDGET_TOKENS in self.supported_params:
+            thinking_value = (
+                current_params.thinking_budget_tokens
+                if current_params.thinking_budget_tokens is not None
+                else -1
+            )
+            self.thinking_budget_input = TextInput(
+                label="Thinking Budget (Gemini, -1=动态)",
+                placeholder="思考链 token 预算，-1 表示动态",
+                default=str(thinking_value),
+                custom_id="thinking_budget_tokens",
+                required=False,
+                min_length=1,
+                max_length=8,
+            )
+            self.add_item(self.thinking_budget_input)
+        else:
+            self.thinking_budget_input = None
+
         # 最大输出 token - 所有模型都支持
         self.max_tokens_input = TextInput(
             label="Max Output Tokens",
@@ -160,6 +180,12 @@ class ModelParamsModal(Modal):
                 and self.frequency_penalty_input.value
             ):
                 params["frequency_penalty"] = float(self.frequency_penalty_input.value)
+
+            if (
+                self.thinking_budget_input is not None
+                and self.thinking_budget_input.value
+            ):
+                params["thinking_budget_tokens"] = int(self.thinking_budget_input.value)
 
             # 验证参数范围
             if not (0.0 <= params["temperature"] <= 2.0):
@@ -208,6 +234,92 @@ class ModelParamsModal(Modal):
             await interaction.response.send_message(
                 f"❌ 参数格式错误: {e}", ephemeral=True
             )
+
+
+class PromptsModal(Modal):
+    """提示词编辑模态框 - 支持编辑所有4种提示词"""
+
+    def __init__(
+        self,
+        model_name: str,
+        current_params: ModelParams,
+        on_save_callback: Callable[
+            [Interaction, str, Dict[str, Optional[str]]], Awaitable[None]
+        ],
+    ):
+        self.model_name = model_name
+        self.current_params = current_params
+        self.on_save_callback = on_save_callback
+
+        super().__init__(title=f"编辑 {model_name} 提示词")
+
+        # 系统提示词
+        self.system_prompt_input = TextInput(
+            label="系统提示词 (留空使用默认)",
+            placeholder="核心身份设定，留空使用 prompts.py 中的默认值",
+            default=current_params.system_prompt or "",
+            custom_id="system_prompt",
+            required=False,
+            style=discord.TextStyle.paragraph,
+            max_length=4000,
+        )
+        self.add_item(self.system_prompt_input)
+
+        # 越狱用户提示词
+        self.jailbreak_user_input = TextInput(
+            label="越狱用户提示词 (留空使用默认)",
+            placeholder="JAILBREAK_USER_PROMPT，留空使用默认值",
+            default=current_params.jailbreak_user_prompt or "",
+            custom_id="jailbreak_user_prompt",
+            required=False,
+            style=discord.TextStyle.paragraph,
+            max_length=4000,
+        )
+        self.add_item(self.jailbreak_user_input)
+
+        # 越狱模型响应
+        self.jailbreak_response_input = TextInput(
+            label="越狱模型响应 (留空使用默认)",
+            placeholder="JAILBREAK_MODEL_RESPONSE，留空使用默认值",
+            default=current_params.jailbreak_model_response or "",
+            custom_id="jailbreak_model_response",
+            required=False,
+            style=discord.TextStyle.paragraph,
+            max_length=4000,
+        )
+        self.add_item(self.jailbreak_response_input)
+
+        # 最终指令
+        self.final_instruction_input = TextInput(
+            label="最终指令 (留空使用默认)",
+            placeholder="JAILBREAK_FINAL_INSTRUCTION，留空使用默认值",
+            default=current_params.jailbreak_final_instruction or "",
+            custom_id="jailbreak_final_instruction",
+            required=False,
+            style=discord.TextStyle.paragraph,
+            max_length=4000,
+        )
+        self.add_item(self.final_instruction_input)
+
+    async def on_submit(self, interaction: Interaction):
+        """提交时保存所有提示词"""
+        prompts = {
+            "system_prompt": self._get_value_or_none(self.system_prompt_input),
+            "jailbreak_user_prompt": self._get_value_or_none(self.jailbreak_user_input),
+            "jailbreak_model_response": self._get_value_or_none(
+                self.jailbreak_response_input
+            ),
+            "jailbreak_final_instruction": self._get_value_or_none(
+                self.final_instruction_input
+            ),
+        }
+
+        await self.on_save_callback(interaction, self.model_name, prompts)
+
+    def _get_value_or_none(self, text_input: TextInput) -> Optional[str]:
+        """获取输入值，如果为空则返回 None"""
+        value = text_input.value.strip()
+        return value if value else None
 
 
 class ModelParamsView(View):
@@ -276,12 +388,22 @@ class ModelParamsView(View):
             edit_button.callback = self._on_edit_params
             self.add_item(edit_button)
 
+            # 编辑提示词按钮
+            prompt_button = Button(
+                label="💬 编辑提示词",
+                style=ButtonStyle.success,
+                custom_id="edit_prompt",
+                row=2,
+            )
+            prompt_button.callback = self._on_edit_prompt
+            self.add_item(prompt_button)
+
             # 重置参数按钮
             reset_button = Button(
                 label="🔄 重置为默认",
                 style=ButtonStyle.danger,
                 custom_id="reset_params",
-                row=1,
+                row=2,
             )
             reset_button.callback = self._on_reset_params
             self.add_item(reset_button)
@@ -325,6 +447,22 @@ class ModelParamsView(View):
                 else "未设置"
             )
             lines.append(f"**Frequency Penalty:** {frequency}")
+
+        # 显示提示词状态
+        prompt_statuses = []
+        if params.system_prompt:
+            prompt_statuses.append("系统✅")
+        if params.jailbreak_user_prompt:
+            prompt_statuses.append("越狱用户✅")
+        if params.jailbreak_model_response:
+            prompt_statuses.append("越狱响应✅")
+        if params.jailbreak_final_instruction:
+            prompt_statuses.append("最终指令✅")
+
+        if prompt_statuses:
+            lines.append(f"**自定义提示词:** {', '.join(prompt_statuses)}")
+        else:
+            lines.append("**提示词:** 📋 全部默认")
 
         return "\n".join(lines)
 
@@ -419,6 +557,7 @@ class ModelParamsView(View):
             max_output_tokens=params["max_output_tokens"],
             presence_penalty=params.get("presence_penalty"),
             frequency_penalty=params.get("frequency_penalty"),
+            thinking_budget_tokens=params.get("thinking_budget_tokens"),
             provider=params.get("provider", "default"),
         )
 
@@ -451,6 +590,80 @@ class ModelParamsView(View):
         await interaction.response.edit_message(
             embed=self._get_params_embed(), view=self
         )
+
+    async def _on_edit_prompt(self, interaction: Interaction):
+        """编辑提示词回调"""
+        if not self.selected_model:
+            await interaction.response.send_message("请先选择一个模型", ephemeral=True)
+            return
+
+        current_params = self.model_params.get(self.selected_model)
+        if current_params is None:
+            current_params = ModelParams(provider="default")
+
+        modal = PromptsModal(
+            model_name=self.selected_model,
+            current_params=current_params,
+            on_save_callback=self._on_save_prompts,
+        )
+
+        await interaction.response.send_modal(modal)
+
+    async def _on_save_prompts(
+        self,
+        interaction: Interaction,
+        model_name: str,
+        prompts: Dict[str, Optional[str]],
+    ):
+        """保存所有提示词回调"""
+        # 获取当前参数
+        current_params = self.model_params.get(model_name)
+        if current_params is None:
+            current_params = ModelParams(provider="default")
+
+        # 更新所有提示词并保存
+        await chat_settings_service.set_model_params(
+            model_name=model_name,
+            temperature=current_params.temperature,
+            top_p=current_params.top_p,
+            top_k=current_params.top_k,
+            max_output_tokens=current_params.max_output_tokens,
+            presence_penalty=current_params.presence_penalty,
+            frequency_penalty=current_params.frequency_penalty,
+            thinking_budget_tokens=current_params.thinking_budget_tokens,
+            system_prompt=prompts["system_prompt"],
+            jailbreak_user_prompt=prompts["jailbreak_user_prompt"],
+            jailbreak_model_response=prompts["jailbreak_model_response"],
+            jailbreak_final_instruction=prompts["jailbreak_final_instruction"],
+            provider=current_params.provider,
+        )
+
+        # 更新本地缓存
+        current_params.system_prompt = prompts["system_prompt"]
+        current_params.jailbreak_user_prompt = prompts["jailbreak_user_prompt"]
+        current_params.jailbreak_model_response = prompts["jailbreak_model_response"]
+        current_params.jailbreak_final_instruction = prompts[
+            "jailbreak_final_instruction"
+        ]
+        self.model_params[model_name] = current_params
+
+        # 统计有多少提示词被设置
+        set_count = sum(1 for v in prompts.values() if v is not None)
+
+        if set_count > 0:
+            await interaction.response.send_message(
+                f"✅ 已为 **{model_name}** 设置 {set_count} 个自定义提示词",
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                f"✅ 已将 **{model_name}** 的所有提示词重置为默认", ephemeral=True
+            )
+
+        # 刷新视图
+        self._create_view_items()
+        if self.message:
+            await self.message.edit(embed=self._get_params_embed(), view=self)
 
     async def _on_back(self, interaction: Interaction):
         """返回回调"""

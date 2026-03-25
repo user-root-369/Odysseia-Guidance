@@ -205,36 +205,6 @@ FORUM_RAG_CONFIG = {
     "EXACT_MATCH_BOOST": 1000.0,  # 精确匹配（content包含完整query）的额外加分数值
 }
 
-# --- 模型生成配置 ---
-# 为不同的模型别名定义独立的生成参数。
-# Key 是我们在代码中使用的模型别名 (例如 "gemini-3-flash-custom")。
-MODEL_GENERATION_CONFIG = {
-    # 默认配置，当找不到特定模型配置时使用
-    "default": {
-        "temperature": 1.1,
-        "top_p": 0.95,
-        "top_k": 40,
-        "max_output_tokens": 6000,
-        "thinking_config": {
-            "include_thoughts": True,
-            "thinking_budget": -1,  # 默认使用动态思考预算
-        },
-    },
-    # 为 gemini-3-flash-preview 模型定制的配置
-    "gemini-3-flash-custom": {
-        "temperature": 1,
-        "top_p": 0.95,
-        "top_k": 40,
-        "max_output_tokens": 6000,
-        "thinking_config": {
-            "include_thoughts": True,
-            "thinking_level": "Medium",  # 使用新的思考等级设置
-        },
-    },
-    # 你可以在这里为其他模型添加更多自定义配置
-    # "gemini-2.5-pro-custom": { ... },
-}
-
 # --- 消息设置 ---
 MESSAGE_SETTINGS = {
     "DM_THRESHOLD": 300,  # 当消息长度超过此值时，通过私信发送

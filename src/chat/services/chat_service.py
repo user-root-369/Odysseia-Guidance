@@ -315,6 +315,7 @@ class ChatService:
                 max_output_tokens=model_params.max_output_tokens,
                 presence_penalty=model_params.presence_penalty,
                 frequency_penalty=model_params.frequency_penalty,
+                thinking_budget_tokens=model_params.thinking_budget_tokens,
             )
 
             # 调用 AIService

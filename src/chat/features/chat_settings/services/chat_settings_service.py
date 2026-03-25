@@ -531,6 +531,11 @@ class ChatSettingsService:
         max_output_tokens: Optional[int] = None,
         presence_penalty: Optional[float] = None,
         frequency_penalty: Optional[float] = None,
+        thinking_budget_tokens: Optional[int] = None,
+        system_prompt: Optional[str] = None,
+        jailbreak_user_prompt: Optional[str] = None,
+        jailbreak_model_response: Optional[str] = None,
+        jailbreak_final_instruction: Optional[str] = None,
         provider: Optional[str] = None,
     ) -> None:
         """
@@ -544,6 +549,11 @@ class ChatSettingsService:
             max_output_tokens: 最大输出 token 数
             presence_penalty: 存在惩罚 (-2.0 to 2.0) (仅 DeepSeek/OpenAI)
             frequency_penalty: 频率惩罚 (-2.0 to 2.0) (仅 DeepSeek/OpenAI)
+            thinking_budget_tokens: 思考链 token 预算 (仅 Gemini, -1 表示动态)
+            system_prompt: 自定义系统提示词 (None 表示使用默认)
+            jailbreak_user_prompt: 自定义越狱用户提示词 (None 表示使用默认)
+            jailbreak_model_response: 自定义越狱模型响应 (None 表示使用默认)
+            jailbreak_final_instruction: 自定义最终指令 (None 表示使用默认)
             provider: 模型提供商 (deepseek/gemini/openai/anthropic/default)
         """
         from src.chat.config.model_params import (
@@ -571,6 +581,21 @@ class ChatSettingsService:
             frequency_penalty=frequency_penalty
             if frequency_penalty is not None
             else current_params.frequency_penalty,
+            thinking_budget_tokens=thinking_budget_tokens
+            if thinking_budget_tokens is not None
+            else current_params.thinking_budget_tokens,
+            system_prompt=system_prompt
+            if system_prompt is not None
+            else current_params.system_prompt,
+            jailbreak_user_prompt=jailbreak_user_prompt
+            if jailbreak_user_prompt is not None
+            else current_params.jailbreak_user_prompt,
+            jailbreak_model_response=jailbreak_model_response
+            if jailbreak_model_response is not None
+            else current_params.jailbreak_model_response,
+            jailbreak_final_instruction=jailbreak_final_instruction
+            if jailbreak_final_instruction is not None
+            else current_params.jailbreak_final_instruction,
             provider=provider if provider is not None else current_params.provider,
         )
 

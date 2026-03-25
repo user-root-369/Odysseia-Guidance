@@ -12,6 +12,7 @@ import discord
 
 from src.chat.config.prompts import PROMPT_CONFIG
 from src.chat.config import chat_config
+from src.chat.config.model_params import get_model_params
 from src.chat.services.event_service import event_service
 
 log = logging.getLogger(__name__)
@@ -73,13 +74,40 @@ class PromptService:
     ) -> Optional[str]:
         """
         安全地获取指定模型或默认模型的提示词。
+        优先级：模型参数配置中的自定义提示词 > PROMPT_CONFIG 中的模型特定提示词 > 默认提示词
         """
-        # 尝试获取特定模型的配置
+        # 1. 优先检查模型参数配置中的自定义提示词
+        if model_name:
+            model_params = get_model_params(model_name)
+            # 根据提示词类型检查对应的自定义字段
+            if prompt_name == "SYSTEM_PROMPT" and model_params.system_prompt:
+                log.debug(f"使用模型 {model_name} 的自定义系统提示词")
+                return model_params.system_prompt
+            elif (
+                prompt_name == "JAILBREAK_USER_PROMPT"
+                and model_params.jailbreak_user_prompt
+            ):
+                log.debug(f"使用模型 {model_name} 的自定义越狱用户提示词")
+                return model_params.jailbreak_user_prompt
+            elif (
+                prompt_name == "JAILBREAK_MODEL_RESPONSE"
+                and model_params.jailbreak_model_response
+            ):
+                log.debug(f"使用模型 {model_name} 的自定义越狱模型响应")
+                return model_params.jailbreak_model_response
+            elif (
+                prompt_name == "JAILBREAK_FINAL_INSTRUCTION"
+                and model_params.jailbreak_final_instruction
+            ):
+                log.debug(f"使用模型 {model_name} 的自定义最终指令")
+                return model_params.jailbreak_final_instruction
+
+        # 2. 尝试获取特定模型的配置
         model_config = PROMPT_CONFIG.get(model_name) if model_name else None
         # 如果模型配置存在且包含所需的提示词，则返回它
         if model_config and prompt_name in model_config:
             return model_config[prompt_name]
-        # 否则，回退到默认配置
+        # 3. 否则，回退到默认配置
         return PROMPT_CONFIG.get("default", {}).get(prompt_name)
 
     def get_prompt(self, prompt_name: str, **kwargs) -> Optional[str]:
