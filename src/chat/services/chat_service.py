@@ -7,6 +7,7 @@ import discord.abc
 
 # 导入所需的服务
 from src.chat.services.ai.service import ai_service
+from src.chat.utils.prompt_utils import replace_emojis
 from src.chat.services.prompt_service import prompt_service
 from src.chat.services.context_service_test import get_context_service  # 导入测试服务
 from src.chat.features.world_book.services.world_book_service import world_book_service
@@ -387,7 +388,10 @@ class ChatService:
         if ai_response.startswith(bot_name_prefix):
             ai_response = ai_response[len(bot_name_prefix) :].lstrip()
         # 将多段回复的双换行符替换为单换行符
-        return ai_response.replace("\n\n", "\n")
+        formatted_response = ai_response.replace("\n\n", "\n")
+        # 转换表情包占位符为Discord自定义表情
+        formatted_response = replace_emojis(formatted_response)
+        return formatted_response
 
     async def _perform_post_response_tasks(
         self,
