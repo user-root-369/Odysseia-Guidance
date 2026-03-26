@@ -463,6 +463,11 @@ class AIService:
 
             log.info(f"尝试故障转移到 Provider '{fallback_name}'")
 
+            # 故障转移时需要重新预处理图片（不同 Provider 可能需要不同处理）
+            fallback_messages = await self._preprocess_messages_for_vision(
+                messages, provider, **kwargs
+            )
+
             try:
                 # 使用故障转移 Provider 的默认模型
                 fallback_model = (
@@ -471,7 +476,7 @@ class AIService:
 
                 if tool_executor:
                     result = await provider.generate_with_tools(
-                        messages=messages,
+                        messages=fallback_messages,
                         config=config,
                         tools=tools,
                         tool_executor=tool_executor,
@@ -481,7 +486,7 @@ class AIService:
                     )
                 else:
                     result = await provider.generate(
-                        messages=messages,
+                        messages=fallback_messages,
                         config=config,
                         tools=tools,
                         model=fallback_model,

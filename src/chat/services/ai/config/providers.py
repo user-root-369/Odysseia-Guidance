@@ -63,8 +63,16 @@ def _parse_custom_gemini_endpoints() -> Dict[str, ProviderConfig]:
     从环境变量解析自定义 Gemini 端点配置
 
     环境变量格式：
-    - CUSTOM_GEMINI_URL_<NAME>=https://...
-    - CUSTOM_GEMINI_API_KEY_<NAME>=key
+    - CUSTOM_GEMINI_URL_<NAME>=https://...          (必填) 端点 URL
+    - CUSTOM_GEMINI_API_KEY_<NAME>=key              (必填) API 密钥
+    - CUSTOM_GEMINI_MODEL_<NAME>=gemini-2.5-pro     (可选) 实际请求的模型名称
+
+    示例：
+    - CUSTOM_GEMINI_URL_MYENDPOINT=https://api.example.com
+    - CUSTOM_GEMINI_API_KEY_MYENDPOINT=sk-xxx
+    - CUSTOM_GEMINI_MODEL_MYENDPOINT=gemini-2.5-pro
+
+    如果不指定 CUSTOM_GEMINI_MODEL_<NAME>，则默认使用 gemini-<name>-custom 作为模型名
     """
     configs = {}
 
@@ -72,12 +80,22 @@ def _parse_custom_gemini_endpoints() -> Dict[str, ProviderConfig]:
     for key, value in os.environ.items():
         if key.startswith("CUSTOM_GEMINI_URL_"):
             endpoint_name = key[len("CUSTOM_GEMINI_URL_") :].lower()
-            model_name = f"gemini-{endpoint_name.replace('_', '-')}-custom"
 
             # 查找对应的 API 密钥
             api_key = os.getenv(f"CUSTOM_GEMINI_API_KEY_{endpoint_name.upper()}")
             if not api_key:
                 api_key = os.getenv(f"CUSTOM_GEMINI_API_KEY_{endpoint_name}")
+
+            # 查找自定义模型名称（可选）
+            custom_model = os.getenv(f"CUSTOM_GEMINI_MODEL_{endpoint_name.upper()}")
+            if not custom_model:
+                custom_model = os.getenv(f"CUSTOM_GEMINI_MODEL_{endpoint_name}")
+
+            # 确定模型名称：优先使用自定义模型名，否则使用默认格式
+            if custom_model:
+                model_name = custom_model
+            else:
+                model_name = f"gemini-{endpoint_name.replace('_', '-')}-custom"
 
             if api_key and value:
                 config_name = f"gemini_custom_{endpoint_name}"
