@@ -28,7 +28,7 @@ from .providers import (
     OpenAICompatibleProvider,
 )
 from .config.providers import get_provider_configs, ProviderConfig
-from .config.models import get_fallback_providers
+from .config.models import get_fallback_providers, get_model_config
 
 log = logging.getLogger(__name__)
 
@@ -220,20 +220,65 @@ class AIService:
         """
         return self._providers.get(name)
 
-    def get_provider_for_model(self, model_name: str) -> Optional[BaseProvider]:
+    def parse_model_id(self, model_id: str) -> tuple[str, Optional[str]]:
+        """
+        解析模型 ID，支持 "provider:model" 格式和旧格式。
+
+        Args:
+            model_id: 模型 ID，可以是 "provider:model" 或纯模型名
+
+        Returns:
+            (model_name, provider_name) 元组
+            - 如果是新格式，返回解析后的 (model, provider)
+            - 如果是旧格式，返回 (model, None)，需要后续查找 provider
+        """
+        if not model_id:
+            return model_id, None
+
+        if ":" in model_id:
+            parts = model_id.split(":", 1)
+            return parts[1], parts[0]
+
+        return model_id, None
+
+    def get_provider_for_model(
+        self, model_name: str, provider_name: Optional[str] = None
+    ) -> Optional[BaseProvider]:
         """
         获取支持指定模型的 Provider
 
         Args:
             model_name: 模型名称
+            provider_name: 可选的 Provider 名称（用于新格式）
 
         Returns:
             Optional[BaseProvider]: Provider 实例
         """
+        # 如果指定了 provider，直接使用
+        if provider_name:
+            return self._providers.get(provider_name)
+
+        # 否则从映射表查找
         provider_name = self._model_to_provider.get(model_name)
         if provider_name:
             return self._providers.get(provider_name)
         return None
+
+    def get_actual_model_name(self, model_name: str) -> str:
+        """
+        获取模型的实际调用名称（actual_model）
+
+        Args:
+            model_name: 模型显示名称（如 gemini-2.5-pro-custom）
+
+        Returns:
+            str: 实际调用的模型名称（如 gemini-2.5-pro）
+        """
+        model_config = get_model_config(model_name)
+        if model_config and model_config.actual_model:
+            return model_config.actual_model
+        # 如果没有配置或没有 actual_model，返回原始名称
+        return model_name
 
     async def generate(
         self,
@@ -250,7 +295,7 @@ class AIService:
         Args:
             messages: 对话消息列表
             config: 生成配置
-            model: 模型名称
+            model: 模型 ID，支持 "provider:model" 格式或纯模型名
             tools: 工具列表
             fallback: 是否启用故障转移
             **kwargs: 其他参数
@@ -259,14 +304,27 @@ class AIService:
             GenerationResult: 生成结果
         """
         config = config or GenerationConfig()
-        model_name = model or self._get_default_model()
+        model_id = model or self._get_default_model()
 
-        provider = self.get_provider_for_model(model_name)
+        # 解析模型 ID（支持 "provider:model" 格式）
+        model_name, explicit_provider = self.parse_model_id(model_id)
+
+        # 获取 Provider
+        provider = self.get_provider_for_model(model_name, explicit_provider)
         if not provider:
-            raise ModelNotSupportedError(f"不支持的模型: {model_name}")
+            raise ModelNotSupportedError(f"不支持的模型: {model_id}")
 
-        provider_name = self._model_to_provider.get(model_name, "")
-        log.info(f"[AIService] 使用模型: {model_name}, Provider: {provider_name}")
+        # 确定 provider_name（优先使用显式指定的，否则从映射表查找）
+        if explicit_provider:
+            provider_name = explicit_provider
+        else:
+            provider_name = self._model_to_provider.get(model_name, "")
+
+        # 获取实际调用的模型名称（actual_model）
+        actual_model = self.get_actual_model_name(model_name)
+        log.info(
+            f"[AIService] 使用模型: {model_name} (实际: {actual_model}), Provider: {provider_name}"
+        )
 
         # 预处理消息：对于不支持视觉的 Provider，将图片转换为文字描述
         messages = await self._preprocess_messages_for_vision(
@@ -281,7 +339,7 @@ class AIService:
                 messages=messages,
                 config=config,
                 tools=tools,
-                model=model_name,
+                model=actual_model,  # 使用实际模型名称
                 **kwargs,
             )
         except GenerationError as e:
@@ -322,6 +380,7 @@ class AIService:
         tool_executor: Optional[Any] = None,
         max_iterations: int = 5,
         fallback: bool = True,
+        user_id_for_settings: Optional[str] = None,
         **kwargs,
     ) -> GenerationResult:
         """
@@ -330,26 +389,37 @@ class AIService:
         Args:
             messages: 对话消息列表
             config: 生成配置
-            model: 模型名称
+            model: 模型 ID，支持 "provider:model" 格式或纯模型名
             tools: 工具列表
             tool_executor: 工具执行函数
             max_iterations: 最大迭代次数
             fallback: 是否启用故障转移
+            user_id_for_settings: 用于获取工具设置的用户 ID（故障转移时需要重新获取工具）
             **kwargs: 其他参数
 
         Returns:
             GenerationResult: 最终生成结果
         """
         config = config or GenerationConfig()
-        model_name = model or self._get_default_model()
+        model_id = model or self._get_default_model()
 
-        provider = self.get_provider_for_model(model_name)
+        # 解析模型 ID（支持 "provider:model" 格式）
+        model_name, explicit_provider = self.parse_model_id(model_id)
+
+        provider = self.get_provider_for_model(model_name, explicit_provider)
         if not provider:
-            raise ModelNotSupportedError(f"不支持的模型: {model_name}")
+            raise ModelNotSupportedError(f"不支持的模型: {model_id}")
 
-        provider_name = self._model_to_provider.get(model_name, "")
+        # 确定 provider_name（优先使用显式指定的，否则从映射表查找）
+        if explicit_provider:
+            provider_name = explicit_provider
+        else:
+            provider_name = self._model_to_provider.get(model_name, "")
+
+        # 获取实际调用的模型名称（actual_model）
+        actual_model = self.get_actual_model_name(model_name)
         log.info(
-            f"[AIService] 使用模型: {model_name}, Provider: {provider_name} (with tools)"
+            f"[AIService] 使用模型: {model_name} (实际: {actual_model}), Provider: {provider_name} (with tools)"
         )
 
         # 预处理消息：对于不支持视觉的 Provider，将图片转换为文字描述
@@ -367,7 +437,7 @@ class AIService:
                 tools=tools,
                 tool_executor=tool_executor,
                 max_iterations=max_iterations,
-                model=model_name,
+                model=actual_model,  # 使用实际模型名称
                 **kwargs,
             )
         except GenerationError as e:
@@ -381,6 +451,7 @@ class AIService:
                     model=model_name,
                     tool_executor=tool_executor,
                     max_iterations=max_iterations,
+                    user_id_for_settings=user_id_for_settings,
                     **kwargs,
                 )
             raise
@@ -395,6 +466,7 @@ class AIService:
                     model=model_name,
                     tool_executor=tool_executor,
                     max_iterations=max_iterations,
+                    user_id_for_settings=user_id_for_settings,
                     **kwargs,
                 )
             raise GenerationError(
@@ -413,6 +485,7 @@ class AIService:
         model: Optional[str] = None,
         tool_executor: Optional[Any] = None,
         max_iterations: int = 5,
+        user_id_for_settings: Optional[str] = None,
         **kwargs,
     ) -> GenerationResult:
         """
@@ -421,12 +494,13 @@ class AIService:
         Args:
             messages: 对话消息列表
             config: 生成配置
-            tools: 工具列表
+            tools: 工具列表（原始格式，可能不兼容故障转移 Provider）
             failed_provider: 失败的 Provider 名称
             original_error: 原始错误
             model: 原始模型名称
             tool_executor: 工具执行函数
             max_iterations: 最大迭代次数
+            user_id_for_settings: 用于重新获取工具的用户 ID
             **kwargs: 其他参数
 
         Returns:
@@ -474,21 +548,52 @@ class AIService:
                     provider.supported_models[0] if provider.supported_models else None
                 )
 
-                if tool_executor:
+                # 根据 fallback provider 类型重新获取工具（解决格式不兼容问题）
+                fallback_tools = None
+                log.debug(
+                    f"故障转移工具检查: tool_executor={tool_executor is not None}, "
+                    f"tool_service={self._tool_service is not None}, "
+                    f"user_id={user_id_for_settings}"
+                )
+                if tool_executor and self._tool_service and user_id_for_settings:
+                    try:
+                        fallback_tools = (
+                            await self._tool_service.get_dynamic_tools_for_context(
+                                user_id_for_settings, provider_type=fallback_name
+                            )
+                        )
+                        log.info(
+                            f"故障转移时为 Provider '{fallback_name}' 重新获取了 {len(fallback_tools)} 个工具"
+                        )
+                    except Exception as tool_error:
+                        log.warning(
+                            f"故障转移时获取工具失败，将不使用工具: {tool_error}"
+                        )
+                        fallback_tools = None
+                else:
+                    log.info(
+                        f"故障转移时不使用工具: tool_executor={tool_executor is not None}, "
+                        f"tool_service={self._tool_service is not None}, "
+                        f"user_id={user_id_for_settings}"
+                    )
+
+                if tool_executor and fallback_tools:
+                    # 使用重新获取的工具调用 generate_with_tools
                     result = await provider.generate_with_tools(
                         messages=fallback_messages,
                         config=config,
-                        tools=tools,
+                        tools=fallback_tools,
                         tool_executor=tool_executor,
                         max_iterations=max_iterations,
                         model=fallback_model,
                         **kwargs,
                     )
                 else:
+                    # 没有工具或工具获取失败，直接生成
                     result = await provider.generate(
                         messages=fallback_messages,
                         config=config,
-                        tools=tools,
+                        tools=None,
                         model=fallback_model,
                         **kwargs,
                     )
@@ -795,18 +900,25 @@ class AIService:
             )
         )
 
-        # 记录工具（如果有）
+        # 记录工具（如果有）- 只显示工具名称，不显示完整定义
         if tools:
-            log.info(f"Tools ({len(tools)} 个):")
-            tools_serialized = []
+            tool_names = []
             for tool in tools:
-                if hasattr(tool, "__dict__"):
-                    tools_serialized.append(self._serialize_for_logging(vars(tool)))
+                # Gemini 格式: types.Tool 有 function_declarations 属性
+                if hasattr(tool, "function_declarations"):
+                    for decl in tool.function_declarations:
+                        tool_names.append(decl.name)
+                # OpenAI 格式: dict 有 type 和 function
                 elif isinstance(tool, dict):
-                    tools_serialized.append(self._serialize_for_logging(tool))
-                else:
-                    tools_serialized.append(str(tool))
-            log.info(json.dumps(tools_serialized, ensure_ascii=False, indent=2))
+                    if tool.get("type") == "function" and "function" in tool:
+                        tool_names.append(tool["function"].get("name", "unknown"))
+                    elif "name" in tool:
+                        tool_names.append(tool["name"])
+                # 其他格式：尝试获取 name 属性
+                elif hasattr(tool, "name"):
+                    tool_names.append(tool.name)
+
+            log.info(f"Tools ({len(tool_names)} 个): {', '.join(tool_names)}")
 
         log.info("------------------------------------")
 

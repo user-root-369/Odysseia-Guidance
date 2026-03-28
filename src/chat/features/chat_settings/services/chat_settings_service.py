@@ -283,6 +283,26 @@ class ChatSettingsService:
 
         return ai_service.get_available_models()
 
+    def get_models_by_provider(self) -> Dict[str, Dict[str, Any]]:
+        """
+        获取按 Provider 分组的模型配置。
+
+        Returns:
+            {"provider_name": {"model_name": ModelConfig, ...}, ...}
+        """
+        from src.chat.services.ai.config.models import get_model_configs
+
+        model_configs = get_model_configs()
+        grouped: Dict[str, Dict[str, Any]] = {}
+
+        for model_name, config in model_configs.items():
+            provider = config.provider or "unknown"
+            if provider not in grouped:
+                grouped[provider] = {}
+            grouped[provider][model_name] = config
+
+        return grouped
+
     async def get_current_ai_model(self) -> str:
         """获取当前设置的全局AI模型。"""
         from src.chat.services.ai import ai_service
@@ -294,9 +314,56 @@ class ChatSettingsService:
         available_models = ai_service.get_available_models()
         return available_models[0] if available_models else "gemini-2.5-flash"
 
+    async def get_current_ai_model_with_provider(
+        self,
+    ) -> tuple[Optional[str], Optional[str]]:
+        """
+        获取当前设置的 AI 模型及其 Provider。
+
+        Returns:
+            (provider_name, model_name) 元组
+        """
+        full_model_id = await self.db_manager.get_global_setting("ai_model")
+
+        if not full_model_id:
+            # 返回默认模型
+            from src.chat.services.ai.config.models import get_model_configs
+
+            model_configs = get_model_configs()
+            if model_configs:
+                first_model = next(iter(model_configs.items()))
+                return first_model[1].provider, first_model[0]
+            return None, None
+
+        # 解析格式: "provider:model" 或旧格式 "model"
+        if ":" in full_model_id:
+            parts = full_model_id.split(":", 1)
+            return parts[0], parts[1]
+
+        # 旧格式兼容：从配置查找 provider
+        from src.chat.services.ai.config.models import get_model_configs
+
+        model_configs = get_model_configs()
+
+        if full_model_id in model_configs:
+            return model_configs[full_model_id].provider, full_model_id
+
+        return None, full_model_id
+
     async def set_ai_model(self, model: str) -> None:
         """设置全局AI模型。"""
         await self.db_manager.set_global_setting("ai_model", model)
+
+    async def set_ai_model_with_provider(
+        self, provider_name: str, model_name: str
+    ) -> None:
+        """
+        设置全局 AI 模型（带 Provider）。
+
+        存储格式: "provider_name:model_name"
+        """
+        full_model_id = f"{provider_name}:{model_name}"
+        await self.db_manager.set_global_setting("ai_model", full_model_id)
 
     # --- Embedding Model Settings ---
 

@@ -71,7 +71,14 @@ class ProviderFormat:
         Returns:
             MessageFormat: 消息格式类型，未知 Provider 默认返回 OPENAI 格式
         """
-        return cls._MESSAGE_FORMAT_MAP.get(provider_type, MessageFormat.OPENAI)
+        # 首先检查是否在已知映射中
+        if provider_type in cls._MESSAGE_FORMAT_MAP:
+            return cls._MESSAGE_FORMAT_MAP[provider_type]
+        # 然后检查是否以 gemini_ 开头（支持动态注册的自定义端点）
+        if provider_type.startswith("gemini_"):
+            return MessageFormat.GEMINI
+        # 默认返回 OpenAI 格式
+        return MessageFormat.OPENAI
 
     @classmethod
     def is_gemini_provider(cls, provider_type: str) -> bool:
@@ -84,7 +91,13 @@ class ProviderFormat:
         Returns:
             bool: 是否是 Gemini Provider
         """
-        return provider_type in cls._GEMINI_PROVIDERS
+        # 首先检查是否在已知集合中
+        if provider_type in cls._GEMINI_PROVIDERS:
+            return True
+        # 然后检查是否以 gemini_ 开头（支持动态注册的自定义端点）
+        if provider_type.startswith("gemini_"):
+            return True
+        return False
 
     @classmethod
     def is_openai_compatible_provider(cls, provider_type: str) -> bool:

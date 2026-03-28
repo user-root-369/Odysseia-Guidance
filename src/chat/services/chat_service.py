@@ -325,14 +325,22 @@ class ChatService:
                 model=current_model,
                 tools=tools,
                 tool_executor=tool_executor,
+                user_id_for_settings=user_id_for_settings,
             )
 
             # 记录模型使用统计
-            provider_name = ai_service._model_to_provider.get(current_model, "unknown")
+            # 解析模型 ID（支持 "provider:model" 格式）
+            model_name, explicit_provider = ai_service.parse_model_id(current_model)
+            if explicit_provider:
+                provider_name = explicit_provider
+            else:
+                provider_name = ai_service._model_to_provider.get(model_name, "unknown")
+
+            # 使用纯模型名记录（不含 provider 前缀）
             await chat_settings_service.increment_model_usage(
-                model_name=current_model, provider_name=provider_name
+                model_name=model_name, provider_name=provider_name
             )
-            log.debug(f"记录模型使用: {current_model} (Provider: {provider_name})")
+            log.debug(f"记录模型使用: {model_name} (Provider: {provider_name})")
 
             ai_response = result.content
 

@@ -19,8 +19,8 @@ from src.chat.features.chat_settings.ui.cooldown_settings_view import (
     CooldownSettingsView,
 )
 from src.chat.services.event_service import event_service
-from src.chat.features.chat_settings.ui.ai_model_settings_modal import (
-    AIModelSettingsModal,
+from src.chat.features.chat_settings.ui.ai_model_settings_view import (
+    AIModelSettingsView,
 )
 
 
@@ -301,31 +301,49 @@ class ChatSettingsView(View):
         await self._update_view(interaction)
 
     async def on_ai_model_settings(self, interaction: Interaction):
-        """打开AI模型设置模态框。"""
-        current_model = await self.service.get_current_ai_model()
-        available_models = self.service.get_available_ai_models()
+        """打开AI模型设置视图。"""
+        # 获取当前模型和 Provider
+        (
+            current_provider,
+            current_model,
+        ) = await self.service.get_current_ai_model_with_provider()
 
-        async def modal_callback(
-            modal_interaction: Interaction, settings: Dict[str, Any]
-        ):
-            new_model = settings.get("ai_model")
-            if new_model:
-                await self.service.set_ai_model(new_model)
-                await modal_interaction.response.send_message(
-                    f"✅ 已成功将AI模型更换为: **{new_model}**", ephemeral=True
-                )
-            else:
-                await modal_interaction.response.send_message(
-                    "❌ 没有选择任何模型。", ephemeral=True
-                )
-
-        modal = AIModelSettingsModal(
-            title="更换全局AI模型",
+        # 创建新的选择视图
+        view = AIModelSettingsView(
+            current_provider=current_provider,
             current_model=current_model,
-            available_models=available_models,
-            on_submit_callback=modal_callback,
         )
-        await interaction.response.send_modal(modal)
+
+        # 发送视图
+        embed = discord.Embed(
+            title="🤖 AI 模型设置",
+            description="请选择供应商和模型",
+            color=discord.Color.blue(),
+        )
+
+        # 显示当前设置
+        if current_provider and current_model:
+            embed.add_field(
+                name="当前设置",
+                value=f"供应商: `{current_provider}`\n模型: `{current_model}`",
+                inline=False,
+            )
+
+        await interaction.response.send_message(
+            embed=embed,
+            view=view,
+            ephemeral=True,
+        )
+
+        # 等待视图完成
+        await view.wait()
+
+        # 如果用户确认了选择，保存设置
+        full_model_id = view.get_selected_full_model_id()
+        if full_model_id:
+            provider, model = AIModelSettingsView.parse_full_model_id(full_model_id)
+            if provider and model:
+                await self.service.set_ai_model_with_provider(provider, model)
 
     async def on_show_token_usage(self, interaction: Interaction):
         """显示今天的 Token 使用情况。"""

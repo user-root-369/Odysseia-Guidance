@@ -65,52 +65,78 @@ def _parse_custom_gemini_endpoints() -> Dict[str, ProviderConfig]:
     环境变量格式：
     - CUSTOM_GEMINI_URL_<NAME>=https://...          (必填) 端点 URL
     - CUSTOM_GEMINI_API_KEY_<NAME>=key              (必填) API 密钥
-    - CUSTOM_GEMINI_MODEL_<NAME>=gemini-2.5-pro     (可选) 实际请求的模型名称
+
+    模型列表从 models_config.json 中读取，查找所有使用 gemini_custom_<name> provider 的模型。
 
     示例：
-    - CUSTOM_GEMINI_URL_MYENDPOINT=https://api.example.com
-    - CUSTOM_GEMINI_API_KEY_MYENDPOINT=sk-xxx
-    - CUSTOM_GEMINI_MODEL_MYENDPOINT=gemini-2.5-pro
-
-    如果不指定 CUSTOM_GEMINI_MODEL_<NAME>，则默认使用 gemini-<name>-custom 作为模型名
+    - CUSTOM_GEMINI_URL_GG=https://api.example.com
+    - CUSTOM_GEMINI_API_KEY_GG=sk-xxx
+    - models_config.json 中的模型 provider 设为 "gemini_custom_gg"
     """
     configs = {}
 
     # 遍历环境变量查找自定义端点
     for key, value in os.environ.items():
-        if key.startswith("CUSTOM_GEMINI_URL_"):
+        if key.startswith("CUSTOM_GEMINI_URL_") and key != "CUSTOM_GEMINI_URL":
             endpoint_name = key[len("CUSTOM_GEMINI_URL_") :].lower()
+            provider_name = f"gemini_custom_{endpoint_name}"
 
             # 查找对应的 API 密钥
             api_key = os.getenv(f"CUSTOM_GEMINI_API_KEY_{endpoint_name.upper()}")
             if not api_key:
                 api_key = os.getenv(f"CUSTOM_GEMINI_API_KEY_{endpoint_name}")
 
-            # 查找自定义模型名称（可选）
-            custom_model = os.getenv(f"CUSTOM_GEMINI_MODEL_{endpoint_name.upper()}")
-            if not custom_model:
-                custom_model = os.getenv(f"CUSTOM_GEMINI_MODEL_{endpoint_name}")
-
-            # 确定模型名称：优先使用自定义模型名，否则使用默认格式
-            if custom_model:
-                model_name = custom_model
-            else:
-                model_name = f"gemini-{endpoint_name.replace('_', '-')}-custom"
-
             if api_key and value:
-                config_name = f"gemini_custom_{endpoint_name}"
-                configs[config_name] = ProviderConfig(
-                    name=config_name,
+                # 从 models_config.json 读取该 provider 支持的模型
+                models = _get_models_for_provider(provider_name)
+
+                # 如果没有配置模型，使用默认模型名
+                if not models:
+                    default_model = f"gemini-{endpoint_name.replace('_', '-')}-custom"
+                    models = [default_model]
+                else:
+                    default_model = models[0]
+
+                configs[provider_name] = ProviderConfig(
+                    name=provider_name,
                     type="custom",
                     api_key=api_key,
                     base_url=value,
-                    models=[model_name],
-                    default_model=model_name,
+                    models=models,
+                    default_model=default_model,
                     extra={"original_provider": "gemini"},
                 )
-                log.info(f"已加载自定义 Gemini 端点: {model_name} -> {value}")
+                log.info(
+                    f"已加载自定义 Gemini 端点: {provider_name}，支持模型: {models}"
+                )
 
     return configs
+
+
+def _get_models_for_provider(provider_name: str) -> List[str]:
+    """
+    从 models_config.json 获取指定 provider 的所有模型
+
+    Args:
+        provider_name: Provider 名称
+
+    Returns:
+        List[str]: 模型名称列表
+    """
+    try:
+        from .models import get_model_configs
+
+        model_configs = get_model_configs()
+        models = []
+
+        for model_name, config in model_configs.items():
+            if config.provider == provider_name:
+                models.append(model_name)
+
+        return models
+    except Exception as e:
+        log.warning(f"读取 models_config.json 中的 {provider_name} 模型失败: {e}")
+        return []
 
 
 def get_provider_configs() -> Dict[str, ProviderConfig]:

@@ -332,10 +332,10 @@ class GeminiProvider(BaseProvider):
             # 构建生成配置
             gen_config = self._build_generation_config(config)
 
-            # 转换工具格式
+            # 工具格式已由 ToolService.get_dynamic_tools_for_context() 统一转换
+            # Gemini Provider 接收的是 List[types.Tool] 格式
             if tools:
-                gemini_tools = ToolConverter.to_gemini_tools(tools)
-                gen_config.tools = gemini_tools
+                gen_config.tools = tools
                 gen_config.automatic_function_calling = (
                     genai_types.AutomaticFunctionCallingConfig(disable=True)
                 )
@@ -513,6 +513,10 @@ class GeminiProvider(BaseProvider):
         """
         将通用消息格式转换为 Gemini Contents 格式
 
+        支持两种输入格式：
+        - OpenAI 格式: {"role": "user", "content": "text"}
+        - Gemini 格式: {"role": "user", "parts": ["text"]}
+
         Args:
             messages: 通用消息列表
 
@@ -523,56 +527,90 @@ class GeminiProvider(BaseProvider):
 
         for msg in messages:
             role = msg.get("role", "user")
-            content = msg.get("content", "")
+            content = msg.get("content")
+            parts_input = msg.get("parts")
 
-            # 转换角色
-            gemini_role = "user" if role == "user" else "model"
+            # 转换角色 (assistant -> model)
+            gemini_role = (
+                "model"
+                if role == "assistant"
+                else ("user" if role == "user" else "model")
+            )
 
             # 构建 Parts
             parts = []
 
-            # 处理文本内容
-            if isinstance(content, str):
-                parts.append(genai_types.Part(text=content))
-            elif isinstance(content, list):
-                for item in content:
-                    if isinstance(item, str):
-                        parts.append(genai_types.Part(text=item))
-                    elif isinstance(item, dict):
-                        if item.get("type") == "text":
-                            parts.append(genai_types.Part(text=item.get("text", "")))
-                        elif item.get("type") == "image_url":
-                            # 处理图片
-                            image_data = item.get("image_url", {})
-                            if isinstance(image_data, dict):
-                                url = image_data.get("url", "")
-                                if url.startswith("data:"):
-                                    # Base64 编码的图片
-                                    import base64
+            # 优先处理 Gemini 格式 (parts 字段)
+            if parts_input is not None:
+                if isinstance(parts_input, list):
+                    for item in parts_input:
+                        if isinstance(item, str):
+                            if item:  # 跳过空字符串
+                                parts.append(genai_types.Part(text=item))
+                        elif isinstance(item, dict):
+                            # 处理 dict 格式的 part
+                            if "text" in item:
+                                parts.append(genai_types.Part(text=item["text"]))
+                        elif hasattr(item, "__str__"):
+                            # 处理其他可转换为字符串的对象
+                            item_str = str(item)
+                            if item_str:
+                                parts.append(genai_types.Part(text=item_str))
+                elif isinstance(parts_input, str):
+                    if parts_input:
+                        parts.append(genai_types.Part(text=parts_input))
 
-                                    mime_match = (
-                                        url.split(";")[0].split(":")[1]
-                                        if ":" in url
-                                        else "image/png"
-                                    )
-                                    base64_data = (
-                                        url.split(",")[1] if "," in url else ""
-                                    )
-                                    try:
-                                        image_bytes = base64.b64decode(base64_data)
-                                        parts.append(
-                                            genai_types.Part(
-                                                inline_data=genai_types.Blob(
-                                                    mime_type=mime_match,
-                                                    data=image_bytes,
+            # 处理 OpenAI 格式 (content 字段)
+            elif content is not None:
+                if isinstance(content, str):
+                    if content:  # 跳过空字符串
+                        parts.append(genai_types.Part(text=content))
+                elif isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, str):
+                            if item:
+                                parts.append(genai_types.Part(text=item))
+                        elif isinstance(item, dict):
+                            if item.get("type") == "text":
+                                text = item.get("text", "")
+                                if text:
+                                    parts.append(genai_types.Part(text=text))
+                            elif item.get("type") == "image_url":
+                                # 处理图片
+                                image_data = item.get("image_url", {})
+                                if isinstance(image_data, dict):
+                                    url = image_data.get("url", "")
+                                    if url.startswith("data:"):
+                                        # Base64 编码的图片
+                                        import base64
+
+                                        mime_match = (
+                                            url.split(";")[0].split(":")[1]
+                                            if ":" in url
+                                            else "image/png"
+                                        )
+                                        base64_data = (
+                                            url.split(",")[1] if "," in url else ""
+                                        )
+                                        try:
+                                            image_bytes = base64.b64decode(base64_data)
+                                            parts.append(
+                                                genai_types.Part(
+                                                    inline_data=genai_types.Blob(
+                                                        mime_type=mime_match,
+                                                        data=image_bytes,
+                                                    )
                                                 )
                                             )
-                                        )
-                                    except Exception as e:
-                                        log.error(f"解析 Base64 图片失败: {e}")
+                                        except Exception as e:
+                                            log.error(f"解析 Base64 图片失败: {e}")
 
             if parts:
                 contents.append(genai_types.Content(parts=parts, role=gemini_role))
+            else:
+                log.warning(
+                    f"消息转换为空，跳过: role={role}, content={content}, parts={parts_input}"
+                )
 
         return contents
 
