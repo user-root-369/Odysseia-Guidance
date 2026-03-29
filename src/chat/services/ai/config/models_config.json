@@ -79,14 +79,15 @@
         "display_name": "Gemini 2.5 Pro (Custom)",
         "provider": "gemini_custom_gg",
         "actual_model": "gemini-2.5-pro",
-        "description": "自定义 Gemini 2.5 Pro 端点（公益站）",
         "supports_vision": true,
         "supports_tools": true,
         "supports_thinking": true,
         "max_output_tokens": 8192,
+        "description": "自定义 Gemini 2.5 Pro 端点（公益站）",
         "generation_config": {
-            "temperature": 1.0,
+            "temperature": 1.1,
             "top_p": 0.95,
+            "max_output_tokens": 8192,
             "top_k": 40,
             "thinking_budget_tokens": -1
         },

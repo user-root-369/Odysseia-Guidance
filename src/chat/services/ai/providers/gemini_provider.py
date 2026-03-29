@@ -360,10 +360,21 @@ class GeminiProvider(BaseProvider):
 
                 # 检查思考链
                 if response.candidates and response.candidates[0].content.parts:
-                    for part in response.candidates[0].content.parts:
-                        if hasattr(part, "thought") and part.thought:
+                    log.debug(
+                        f"检查 {len(response.candidates[0].content.parts)} 个 parts for thinking"
+                    )
+                    for idx, part in enumerate(response.candidates[0].content.parts):
+                        # 检查是否是思考部分
+                        is_thought = hasattr(part, "thought") and bool(part.thought)
+
+                        # 如果是思考部分，提取文本
+                        if is_thought:
                             thinking_content = part.text
-                            log.info(f"模型思考过程: {thinking_content[:100]}...")
+                            log.info(f"模型思考过程: {thinking_content[:200]}...")
+                        else:
+                            log.debug(
+                                f"Part {idx}: 不是思考部分, text={part.text[:50] if hasattr(part, 'text') and part.text else 'N/A'}..."
+                            )
 
                 # 解析函数调用
                 function_calls = ToolConverter.parse_gemini_function_calls(response)
@@ -485,6 +496,13 @@ class GeminiProvider(BaseProvider):
         Returns:
             genai_types.GenerateContentConfig: Gemini 生成配置
         """
+        log.debug(
+            f"构建 Gemini 配置: temperature={config.temperature}, "
+            f"top_p={config.top_p}, top_k={config.top_k}, "
+            f"max_output_tokens={config.max_output_tokens}, "
+            f"thinking_budget_tokens={config.thinking_budget_tokens}"
+        )
+
         gen_config_params: Dict[str, Any] = {
             "temperature": config.temperature,
             "top_p": config.top_p,
@@ -502,9 +520,16 @@ class GeminiProvider(BaseProvider):
         gen_config = genai_types.GenerateContentConfig(**gen_config_params)
 
         # 添加思考链配置
-        if config.thinking_budget_tokens:
+        log.debug(
+            f"思考链配置检查: thinking_budget_tokens={config.thinking_budget_tokens}"
+        )
+        if config.thinking_budget_tokens is not None:
             gen_config.thinking_config = genai_types.ThinkingConfig(
-                thinking_budget=config.thinking_budget_tokens
+                thinking_budget=config.thinking_budget_tokens,
+                include_thoughts=True,  # 必须设置此参数才能在响应中获取思考内容
+            )
+            log.info(
+                f"已启用思考链: thinking_budget={config.thinking_budget_tokens}, include_thoughts=True"
             )
 
         return gen_config
@@ -691,11 +716,18 @@ class GeminiProvider(BaseProvider):
         Returns:
             GenerationResult: 生成结果
         """
-        # 提取文本内容
+        # 提取文本内容（跳过思考部分）
         content = ""
         if response.candidates and response.candidates[0].content:
             parts = response.candidates[0].content.parts or []
             for part in parts:
+                # 跳过思考部分 - 只提取非思考内容的文本
+                is_thought = hasattr(part, "thought") and part.thought
+                if is_thought:
+                    log.debug(
+                        f"跳过思考部分文本: {part.text[:50] if part.text else 'N/A'}..."
+                    )
+                    continue
                 if hasattr(part, "text") and part.text:
                     content += part.text
 

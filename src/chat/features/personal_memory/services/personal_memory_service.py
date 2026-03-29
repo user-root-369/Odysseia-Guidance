@@ -250,8 +250,8 @@ class PersonalMemoryService:
         # --- [MEMORY DEBUGGER] ---
 
         # 使用 ai_service.generate() 方法
-        # 如果传入了 current_model，使用它；否则回退到 SUMMARY_MODEL
-        model_to_use = current_model if current_model else SUMMARY_MODEL
+        # 始终使用配置的 SUMMARY_MODEL，而不是用户当前的聊天模型
+        model_to_use = SUMMARY_MODEL
         log.info(f"使用模型 {model_to_use} 进行印象总结")
 
         messages = [{"role": "user", "content": final_prompt}]
@@ -292,88 +292,6 @@ class PersonalMemoryService:
             )
         else:
             log.error(f"为用户 {user_id} 生成记忆摘要失败，AI 返回空。")
-
-    async def _summarize_memory(
-        self, user_id: int, conversation_history: list, current_model: str | None = None
-    ):
-        """私有方法：获取历史，生成摘要，并清空计数和历史。"""
-        log.info(f"开始为用户 {user_id} 生成记忆摘要。")
-
-        async with AsyncSessionLocal() as session:
-            stmt = select(CommunityMemberProfile.personal_summary).where(
-                CommunityMemberProfile.discord_id == str(user_id)
-            )
-            result = await session.execute(stmt)
-            old_summary = result.scalars().first() or "无"
-
-        dialogue_text = "\n".join(
-            f"{'用户' if turn.get('role') == 'user' else 'AI'}: {' '.join(map(str, turn.get('parts', [])))}"
-            for turn in conversation_history
-        ).strip()
-
-        if not dialogue_text:
-            log.warning(f"用户 {user_id} 的对话历史格式化后为空。")
-            return
-
-        # 3. 构建 Prompt 并调用 AI 生成新摘要
-        prompt_template = PROMPT_CONFIG.get("personal_memory_summary")
-        if not prompt_template:
-            log.error("未找到 'personal_memory_summary' 的 prompt 模板。")
-            return
-
-        final_prompt = prompt_template.format(
-            old_summary=old_summary, dialogue_history=dialogue_text
-        )
-
-        # --- [MEMORY DEBUGGER] ---
-        def count_summary_lines(summary: str) -> int:
-            return len(
-                [line for line in summary.split("\n") if line.strip().startswith("-")]
-            )
-
-        old_summary_lines = count_summary_lines(old_summary)
-        log.info(f"---[MEMORY DEBUGGER]--- 用户 {user_id} 开始总结 ---")
-        log.info(f"旧摘要行数: {old_summary_lines}")
-        log.info(f"完整的旧摘要:\n{old_summary}")
-        log.info(f"用于总结的对话历史:\n{dialogue_text}")
-        # --- [MEMORY DEBUGGER] ---
-
-        # 使用 ai_service.generate() 方法
-        # 如果传入了 current_model，使用它；否则回退到 SUMMARY_MODEL
-        model_to_use = current_model if current_model else SUMMARY_MODEL
-        log.info(f"使用模型 {model_to_use} 进行记忆摘要")
-
-        messages = [{"role": "user", "content": final_prompt}]
-        config = GenerationConfig(
-            temperature=GEMINI_SUMMARY_GEN_CONFIG.get("temperature", 0.7),
-            max_output_tokens=GEMINI_SUMMARY_GEN_CONFIG.get("max_output_tokens", 2048),
-        )
-        result = await ai_service.generate(
-            messages=messages, config=config, model=model_to_use
-        )
-        new_summary = result.content
-
-        # 4. 将新摘要保存到数据库
-        if new_summary:
-            # --- [MEMORY DEBUGGER] ---
-            new_summary_lines = count_summary_lines(new_summary)
-            log.info(f"---[MEMORY DEBUGGER]--- 用户 {user_id} 总结完毕 ---")
-            log.info(f"新摘要行数: {new_summary_lines} (Prompt要求 <= 30)")
-            if new_summary_lines > 30:
-                log.error("!!!!!!!! MEMORY EXPLOSION DETECTED !!!!!!!!")
-                log.error(
-                    f"用户 {user_id} 的新摘要行数 ({new_summary_lines}) 超过了30条的硬性限制！"
-                )
-                log.error(
-                    f"完整的失控摘要:\n{new_summary}"
-                )  # 使用 ERROR 级别记录失控的摘要
-            else:
-                log.debug(f"完整的新摘要:\n{new_summary}")
-            # --- [MEMORY DEBUGGER] ---
-            await self.update_summary_manually(user_id, new_summary)
-        else:
-            log.error(f"为用户 {user_id} 生成记忆摘要失败，AI 返回空。")
-        log.info(f"用户 {user_id} 的总结流程完成。")
 
     async def get_memory_summary(self, user_id: int) -> str:
         """根据用户ID从 ParadeDB 获取其个人记忆摘要。"""

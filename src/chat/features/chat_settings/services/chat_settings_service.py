@@ -5,7 +5,7 @@ from src.chat.utils.database import chat_db_manager
 from src.chat.services.event_service import event_service
 
 if TYPE_CHECKING:
-    from src.chat.config.model_params import ModelParams
+    from src.chat.services.ai.config.models import ModelConfig
 
 
 class ChatSettingsService:
@@ -584,10 +584,26 @@ class ChatSettingsService:
         Returns:
             Dict[str, Any]: 模型参数配置字典
         """
-        from src.chat.config.model_params import get_model_params
+        from src.chat.services.ai.config.models import (
+            get_model_config,
+            get_generation_config,
+            get_prompt_config,
+        )
 
-        params = get_model_params(model_name)
-        return params.to_dict()
+        config = get_model_config(model_name)
+        if config is None:
+            return {}
+
+        # 合并生成参数和提示词配置
+        gen_config = get_generation_config(model_name)
+        prompt_config = get_prompt_config(model_name)
+
+        result = {
+            "provider": config.provider,
+            **gen_config.to_dict(),
+            **prompt_config.to_dict(),
+        }
+        return result
 
     async def set_model_params(
         self,
@@ -622,67 +638,46 @@ class ChatSettingsService:
             jailbreak_user_prompt: 自定义越狱用户提示词 (None 表示使用默认)
             jailbreak_model_response: 自定义越狱模型响应 (None 表示使用默认)
             jailbreak_final_instruction: 自定义最终指令 (None 表示使用默认)
-            provider: 模型提供商 (deepseek/gemini/openai/anthropic/default)
+            provider: 模型提供商 (deepseek/gemini/openai/anthropic/default) - 已废弃，从配置读取
             use_cache_optimized_build: 是否使用缓存优化的 prompt 构建顺序
         """
-        from src.chat.config.model_params import (
-            get_model_params,
-            update_model_params,
-            ModelParams,
+        from src.chat.services.ai.config.models import (
+            update_model_generation_config,
+            update_model_prompt_config,
         )
 
-        # 获取当前配置
-        current_params = get_model_params(model_name)
-
-        # 更新非 None 的参数
-        new_params = ModelParams(
-            temperature=temperature
-            if temperature is not None
-            else current_params.temperature,
-            top_p=top_p if top_p is not None else current_params.top_p,
-            top_k=top_k if top_k is not None else current_params.top_k,
-            max_output_tokens=max_output_tokens
-            if max_output_tokens is not None
-            else current_params.max_output_tokens,
-            presence_penalty=presence_penalty
-            if presence_penalty is not None
-            else current_params.presence_penalty,
-            frequency_penalty=frequency_penalty
-            if frequency_penalty is not None
-            else current_params.frequency_penalty,
-            thinking_budget_tokens=thinking_budget_tokens
-            if thinking_budget_tokens is not None
-            else current_params.thinking_budget_tokens,
-            system_prompt=system_prompt
-            if system_prompt is not None
-            else current_params.system_prompt,
-            jailbreak_user_prompt=jailbreak_user_prompt
-            if jailbreak_user_prompt is not None
-            else current_params.jailbreak_user_prompt,
-            jailbreak_model_response=jailbreak_model_response
-            if jailbreak_model_response is not None
-            else current_params.jailbreak_model_response,
-            jailbreak_final_instruction=jailbreak_final_instruction
-            if jailbreak_final_instruction is not None
-            else current_params.jailbreak_final_instruction,
-            provider=provider if provider is not None else current_params.provider,
-            use_cache_optimized_build=use_cache_optimized_build
-            if use_cache_optimized_build is not None
-            else current_params.use_cache_optimized_build,
+        # 更新生成参数
+        update_model_generation_config(
+            model_name=model_name,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            max_output_tokens=max_output_tokens,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            thinking_budget_tokens=thinking_budget_tokens,
         )
 
-        update_model_params(model_name, new_params)
+        # 更新提示词配置
+        update_model_prompt_config(
+            model_name=model_name,
+            system_prompt=system_prompt,
+            jailbreak_user_prompt=jailbreak_user_prompt,
+            jailbreak_model_response=jailbreak_model_response,
+            jailbreak_final_instruction=jailbreak_final_instruction,
+            use_cache_optimized_build=use_cache_optimized_build,
+        )
 
-    async def get_all_model_params(self) -> Dict[str, "ModelParams"]:
+    async def get_all_model_params(self) -> Dict[str, "ModelConfig"]:
         """
         获取所有模型的参数配置。
 
         Returns:
-            Dict[str, ModelParams]: 模型名称到参数配置的映射
+            Dict[str, ModelConfig]: 模型名称到配置的映射
         """
-        from src.chat.config.model_params import get_all_model_params
+        from src.chat.services.ai.config.models import get_model_configs
 
-        return get_all_model_params()
+        return get_model_configs()
 
     async def reset_model_params(self, model_name: str) -> bool:
         """
@@ -694,9 +689,9 @@ class ChatSettingsService:
         Returns:
             bool: 是否成功重置
         """
-        from src.chat.config.model_params import reset_to_original
+        from src.chat.services.ai.config.models import reset_model_to_original
 
-        return reset_to_original(model_name)
+        return reset_model_to_original(model_name)
 
 
 # 单例实例

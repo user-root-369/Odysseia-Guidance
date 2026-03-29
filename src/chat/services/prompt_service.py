@@ -12,7 +12,7 @@ import discord
 
 from src.chat.config.prompts import PROMPT_CONFIG
 from src.chat.config import chat_config
-from src.chat.config.model_params import get_model_params
+from src.chat.services.ai.config.models import get_model_config, get_prompt_config
 from src.chat.services.event_service import event_service
 
 log = logging.getLogger(__name__)
@@ -56,16 +56,17 @@ class PromptService:
         if not model_name:
             return False
 
-        from src.chat.config.model_params import get_model_params
-
-        model_params = get_model_params(model_name)
+        prompt_config = get_prompt_config(model_name)
 
         # 如果配置中明确设置了 use_cache_optimized_build，使用配置值
-        if model_params.use_cache_optimized_build is not None:
-            return model_params.use_cache_optimized_build
+        if prompt_config.use_cache_optimized_build is not None:
+            return prompt_config.use_cache_optimized_build
 
         # 否则根据 provider 判断
-        return model_params.provider in self.DEFAULT_CACHE_OPTIMIZED_PROVIDERS
+        model_config = get_model_config(model_name)
+        if model_config:
+            return model_config.provider in self.DEFAULT_CACHE_OPTIMIZED_PROVIDERS
+        return False
 
     @staticmethod
     def _pil_image_to_base64(pil_image: Image.Image) -> tuple[str, str]:
@@ -113,29 +114,29 @@ class PromptService:
         """
         # 1. 优先检查模型参数配置中的自定义提示词
         if model_name:
-            model_params = get_model_params(model_name)
+            prompt_config = get_prompt_config(model_name)
             # 根据提示词类型检查对应的自定义字段
-            if prompt_name == "SYSTEM_PROMPT" and model_params.system_prompt:
+            if prompt_name == "SYSTEM_PROMPT" and prompt_config.system_prompt:
                 log.debug(f"使用模型 {model_name} 的自定义系统提示词")
-                return model_params.system_prompt
+                return prompt_config.system_prompt
             elif (
                 prompt_name == "JAILBREAK_USER_PROMPT"
-                and model_params.jailbreak_user_prompt
+                and prompt_config.jailbreak_user_prompt
             ):
                 log.debug(f"使用模型 {model_name} 的自定义越狱用户提示词")
-                return model_params.jailbreak_user_prompt
+                return prompt_config.jailbreak_user_prompt
             elif (
                 prompt_name == "JAILBREAK_MODEL_RESPONSE"
-                and model_params.jailbreak_model_response
+                and prompt_config.jailbreak_model_response
             ):
                 log.debug(f"使用模型 {model_name} 的自定义越狱模型响应")
-                return model_params.jailbreak_model_response
+                return prompt_config.jailbreak_model_response
             elif (
                 prompt_name == "JAILBREAK_FINAL_INSTRUCTION"
-                and model_params.jailbreak_final_instruction
+                and prompt_config.jailbreak_final_instruction
             ):
                 log.debug(f"使用模型 {model_name} 的自定义最终指令")
-                return model_params.jailbreak_final_instruction
+                return prompt_config.jailbreak_final_instruction
 
         # 2. 尝试获取特定模型的配置
         model_config = PROMPT_CONFIG.get(model_name) if model_name else None

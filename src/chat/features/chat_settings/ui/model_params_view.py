@@ -16,10 +16,10 @@ from typing import Optional, Dict, Any, List, Callable, Awaitable
 from src.chat.features.chat_settings.services.chat_settings_service import (
     chat_settings_service,
 )
-from src.chat.config.model_params import (
-    ModelParams,
+from src.chat.services.ai.config.models import (
+    ModelConfig,
     SupportedParam,
-    PROVIDER_SUPPORTED_PARAMS,
+    get_supported_params_for_provider,
 )
 
 
@@ -29,21 +29,26 @@ class ModelParamsModal(Modal):
     def __init__(
         self,
         model_name: str,
-        current_params: ModelParams,
+        current_config: ModelConfig,
         on_save_callback: Callable[[Interaction, str, Dict[str, Any]], Awaitable[None]],
     ):
         self.model_name = model_name
-        self.current_params = current_params
+        self.current_config = current_config
         self.on_save_callback = on_save_callback
-        self.supported_params = current_params.get_supported_params()
+        self.supported_params = get_supported_params_for_provider(
+            current_config.provider
+        )
 
         super().__init__(title=f"编辑 {model_name} 参数")
+
+        # 获取生成参数
+        gen_config = current_config.generation_config
 
         # 温度参数 - 所有模型都支持
         self.temperature_input = TextInput(
             label="Temperature (0.0-2.0)",
             placeholder="控制随机性，越高越有创意",
-            default=str(current_params.temperature),
+            default=str(gen_config.temperature),
             custom_id="temperature",
             required=True,
             min_length=1,
@@ -55,7 +60,7 @@ class ModelParamsModal(Modal):
         self.top_p_input = TextInput(
             label="Top-p (0.0-1.0)",
             placeholder="核采样参数",
-            default=str(current_params.top_p),
+            default=str(gen_config.top_p),
             custom_id="top_p",
             required=True,
             min_length=1,
@@ -65,9 +70,7 @@ class ModelParamsModal(Modal):
 
         # Top-k 参数 - 仅 Gemini/Anthropic 支持
         if SupportedParam.TOP_K in self.supported_params:
-            top_k_value = (
-                current_params.top_k if current_params.top_k is not None else 40
-            )
+            top_k_value = gen_config.top_k if gen_config.top_k is not None else 40
             self.top_k_input = TextInput(
                 label="Top-k (整数，Gemini/Anthropic)",
                 placeholder="Top-k 采样参数",
@@ -84,8 +87,8 @@ class ModelParamsModal(Modal):
         # 存在惩罚 - 仅 DeepSeek/OpenAI 支持
         if SupportedParam.PRESENCE_PENALTY in self.supported_params:
             presence_value = (
-                current_params.presence_penalty
-                if current_params.presence_penalty is not None
+                gen_config.presence_penalty
+                if gen_config.presence_penalty is not None
                 else 0.0
             )
             self.presence_penalty_input = TextInput(
@@ -104,8 +107,8 @@ class ModelParamsModal(Modal):
         # 频率惩罚 - 仅 DeepSeek/OpenAI 支持
         if SupportedParam.FREQUENCY_PENALTY in self.supported_params:
             frequency_value = (
-                current_params.frequency_penalty
-                if current_params.frequency_penalty is not None
+                gen_config.frequency_penalty
+                if gen_config.frequency_penalty is not None
                 else 0.0
             )
             self.frequency_penalty_input = TextInput(
@@ -124,8 +127,8 @@ class ModelParamsModal(Modal):
         # 思考链 token 预算 - 仅 Gemini 支持
         if SupportedParam.THINKING_BUDGET_TOKENS in self.supported_params:
             thinking_value = (
-                current_params.thinking_budget_tokens
-                if current_params.thinking_budget_tokens is not None
+                gen_config.thinking_budget_tokens
+                if gen_config.thinking_budget_tokens is not None
                 else -1
             )
             self.thinking_budget_input = TextInput(
@@ -145,7 +148,7 @@ class ModelParamsModal(Modal):
         self.max_tokens_input = TextInput(
             label="Max Output Tokens",
             placeholder="最大输出 token 数",
-            default=str(current_params.max_output_tokens),
+            default=str(gen_config.max_output_tokens),
             custom_id="max_output_tokens",
             required=True,
             min_length=1,
@@ -157,7 +160,7 @@ class ModelParamsModal(Modal):
         """提交时解析参数并回调"""
         try:
             params: Dict[str, Any] = {
-                "provider": self.current_params.provider,
+                "provider": self.current_config.provider,
             }
 
             # 解析基础参数
@@ -242,22 +245,25 @@ class PromptsModal(Modal):
     def __init__(
         self,
         model_name: str,
-        current_params: ModelParams,
+        current_config: ModelConfig,
         on_save_callback: Callable[
             [Interaction, str, Dict[str, Optional[str]]], Awaitable[None]
         ],
     ):
         self.model_name = model_name
-        self.current_params = current_params
+        self.current_config = current_config
         self.on_save_callback = on_save_callback
 
         super().__init__(title=f"编辑 {model_name} 提示词")
+
+        # 获取提示词配置
+        prompt_config = current_config.prompt_config
 
         # 系统提示词
         self.system_prompt_input = TextInput(
             label="系统提示词 (留空使用默认)",
             placeholder="核心身份设定，留空使用 prompts.py 中的默认值",
-            default=current_params.system_prompt or "",
+            default=prompt_config.system_prompt or "",
             custom_id="system_prompt",
             required=False,
             style=discord.TextStyle.paragraph,
@@ -269,7 +275,7 @@ class PromptsModal(Modal):
         self.jailbreak_user_input = TextInput(
             label="越狱用户提示词 (留空使用默认)",
             placeholder="JAILBREAK_USER_PROMPT，留空使用默认值",
-            default=current_params.jailbreak_user_prompt or "",
+            default=prompt_config.jailbreak_user_prompt or "",
             custom_id="jailbreak_user_prompt",
             required=False,
             style=discord.TextStyle.paragraph,
@@ -281,7 +287,7 @@ class PromptsModal(Modal):
         self.jailbreak_response_input = TextInput(
             label="越狱模型响应 (留空使用默认)",
             placeholder="JAILBREAK_MODEL_RESPONSE，留空使用默认值",
-            default=current_params.jailbreak_model_response or "",
+            default=prompt_config.jailbreak_model_response or "",
             custom_id="jailbreak_model_response",
             required=False,
             style=discord.TextStyle.paragraph,
@@ -293,7 +299,7 @@ class PromptsModal(Modal):
         self.final_instruction_input = TextInput(
             label="最终指令 (留空使用默认)",
             placeholder="JAILBREAK_FINAL_INSTRUCTION，留空使用默认值",
-            default=current_params.jailbreak_final_instruction or "",
+            default=prompt_config.jailbreak_final_instruction or "",
             custom_id="jailbreak_final_instruction",
             required=False,
             style=discord.TextStyle.paragraph,
@@ -329,7 +335,7 @@ class ModelParamsView(View):
         super().__init__(timeout=300)
         self.on_back_callback = on_back_callback
         self.selected_model: Optional[str] = None
-        self.model_params: Dict[str, ModelParams] = {}
+        self.model_configs: Dict[str, ModelConfig] = {}
         self.available_models: List[str] = []
         self.message: Optional[discord.Message] = None
 
@@ -337,8 +343,8 @@ class ModelParamsView(View):
         """异步初始化"""
         # 获取可用模型列表
         self.available_models = chat_settings_service.get_available_ai_models()
-        # 获取所有模型参数
-        self.model_params = await chat_settings_service.get_all_model_params()
+        # 获取所有模型配置
+        self.model_configs = await chat_settings_service.get_all_model_params()
         self._create_view_items()
 
     @classmethod
@@ -399,13 +405,13 @@ class ModelParamsView(View):
             self.add_item(prompt_button)
 
             # 缓存优化构建开关按钮
-            current_params = self.model_params.get(self.selected_model)
+            current_config = self.model_configs.get(self.selected_model)
             cache_enabled = (
-                current_params.use_cache_optimized_build
-                if current_params
-                and current_params.use_cache_optimized_build is not None
+                current_config.prompt_config.use_cache_optimized_build
+                if current_config
+                and current_config.prompt_config.use_cache_optimized_build is not None
                 else (
-                    current_params.provider == "deepseek" if current_params else False
+                    current_config.provider == "deepseek" if current_config else False
                 )
             )
             cache_button = Button(
@@ -437,54 +443,57 @@ class ModelParamsView(View):
         back_button.callback = self._on_back
         self.add_item(back_button)
 
-    def _get_params_display(self, params: ModelParams) -> str:
+    def _get_params_display(self, config: ModelConfig) -> str:
         """根据模型提供商生成参数显示文本"""
+        gen_config = config.generation_config
+        prompt_config = config.prompt_config
+
         lines = [
-            f"**Temperature:** {params.temperature}",
-            f"**Top-p:** {params.top_p}",
-            f"**Max Tokens:** {params.max_output_tokens}",
+            f"**Temperature:** {gen_config.temperature}",
+            f"**Top-p:** {gen_config.top_p}",
+            f"**Max Tokens:** {gen_config.max_output_tokens}",
         ]
 
-        supported = params.get_supported_params()
+        supported = get_supported_params_for_provider(config.provider)
 
         if SupportedParam.TOP_K in supported:
-            top_k = params.top_k if params.top_k is not None else "未设置"
+            top_k = gen_config.top_k if gen_config.top_k is not None else "未设置"
             lines.append(f"**Top-k:** {top_k}")
 
         if SupportedParam.PRESENCE_PENALTY in supported:
             presence = (
-                params.presence_penalty
-                if params.presence_penalty is not None
+                gen_config.presence_penalty
+                if gen_config.presence_penalty is not None
                 else "未设置"
             )
             lines.append(f"**Presence Penalty:** {presence}")
 
         if SupportedParam.FREQUENCY_PENALTY in supported:
             frequency = (
-                params.frequency_penalty
-                if params.frequency_penalty is not None
+                gen_config.frequency_penalty
+                if gen_config.frequency_penalty is not None
                 else "未设置"
             )
             lines.append(f"**Frequency Penalty:** {frequency}")
 
         # 显示缓存优化构建状态
         cache_enabled = (
-            params.use_cache_optimized_build
-            if params.use_cache_optimized_build is not None
-            else (params.provider == "deepseek")
+            prompt_config.use_cache_optimized_build
+            if prompt_config.use_cache_optimized_build is not None
+            else (config.provider == "deepseek")
         )
         cache_status = "✅ 开启" if cache_enabled else "❌ 关闭"
         lines.append(f"**缓存优化构建:** {cache_status}")
 
         # 显示提示词状态
         prompt_statuses = []
-        if params.system_prompt:
+        if prompt_config.system_prompt:
             prompt_statuses.append("系统✅")
-        if params.jailbreak_user_prompt:
+        if prompt_config.jailbreak_user_prompt:
             prompt_statuses.append("越狱用户✅")
-        if params.jailbreak_model_response:
+        if prompt_config.jailbreak_model_response:
             prompt_statuses.append("越狱响应✅")
-        if params.jailbreak_final_instruction:
+        if prompt_config.jailbreak_final_instruction:
             prompt_statuses.append("最终指令✅")
 
         if prompt_statuses:
@@ -499,6 +508,7 @@ class ModelParamsView(View):
         provider_info = {
             "deepseek": "DeepSeek (支持: temp, top_p, presence_penalty, frequency_penalty)",
             "gemini": "Gemini (支持: temp, top_p, top_k)",
+            "gemini_official": "Gemini Official (支持: temp, top_p, top_k, thinking)",
             "openai": "OpenAI (支持: temp, top_p, presence_penalty, frequency_penalty)",
             "anthropic": "Anthropic (支持: temp, top_p, top_k)",
             "default": "默认 (支持: temp, top_p)",
@@ -514,27 +524,32 @@ class ModelParamsView(View):
         )
 
         if self.selected_model:
-            params = self.model_params.get(self.selected_model)
-            if params is None:
-                params = ModelParams(provider="default")
+            config = self.model_configs.get(self.selected_model)
+            if config is None:
+                # 创建默认配置
+                config = ModelConfig(
+                    display_name=self.selected_model,
+                    provider="default",
+                    actual_model=self.selected_model,
+                )
 
             embed.add_field(
                 name=f"📊 当前模型: {self.selected_model}",
-                value=self._get_params_display(params),
+                value=self._get_params_display(config),
                 inline=False,
             )
 
             embed.add_field(
                 name="提供商",
-                value=self._get_provider_display(params.provider),
+                value=self._get_provider_display(config.provider),
                 inline=False,
             )
 
         # 显示所有模型的参数概览
         params_overview = []
-        for model, params in list(self.model_params.items())[:10]:
-            temp = params.temperature
-            provider = params.provider
+        for model, config in list(self.model_configs.items())[:10]:
+            temp = config.generation_config.temperature
+            provider = config.provider
             params_overview.append(f"• **{model}**: temp={temp} ({provider})")
 
         if params_overview:
@@ -561,13 +576,17 @@ class ModelParamsView(View):
             await interaction.response.send_message("请先选择一个模型", ephemeral=True)
             return
 
-        current_params = self.model_params.get(self.selected_model)
-        if current_params is None:
-            current_params = ModelParams(provider="default")
+        current_config = self.model_configs.get(self.selected_model)
+        if current_config is None:
+            current_config = ModelConfig(
+                display_name=self.selected_model,
+                provider="default",
+                actual_model=self.selected_model,
+            )
 
         modal = ModelParamsModal(
             model_name=self.selected_model,
-            current_params=current_params,
+            current_config=current_config,
             on_save_callback=self._on_save_params,
         )
 
@@ -589,8 +608,12 @@ class ModelParamsView(View):
             provider=params.get("provider", "default"),
         )
 
-        # 更新本地缓存
-        self.model_params[model_name] = ModelParams.from_dict(params)
+        # 重新加载配置以更新本地缓存
+        from src.chat.services.ai.config.models import get_model_config
+
+        updated_config = get_model_config(model_name)
+        if updated_config:
+            self.model_configs[model_name] = updated_config
 
         await interaction.response.send_message(
             f"✅ 已更新 **{model_name}** 的参数配置", ephemeral=True
@@ -610,9 +633,11 @@ class ModelParamsView(View):
         await chat_settings_service.reset_model_params(self.selected_model)
 
         # 更新本地缓存
-        from src.chat.config.model_params import get_model_params
+        from src.chat.services.ai.config.models import get_model_config
 
-        self.model_params[self.selected_model] = get_model_params(self.selected_model)
+        updated_config = get_model_config(self.selected_model)
+        if updated_config:
+            self.model_configs[self.selected_model] = updated_config
 
         self._create_view_items()
         await interaction.response.edit_message(
@@ -625,13 +650,17 @@ class ModelParamsView(View):
             await interaction.response.send_message("请先选择一个模型", ephemeral=True)
             return
 
-        current_params = self.model_params.get(self.selected_model)
-        if current_params is None:
-            current_params = ModelParams(provider="default")
+        current_config = self.model_configs.get(self.selected_model)
+        if current_config is None:
+            current_config = ModelConfig(
+                display_name=self.selected_model,
+                provider="default",
+                actual_model=self.selected_model,
+            )
 
         modal = PromptsModal(
             model_name=self.selected_model,
-            current_params=current_params,
+            current_config=current_config,
             on_save_callback=self._on_save_prompts,
         )
 
@@ -644,36 +673,21 @@ class ModelParamsView(View):
         prompts: Dict[str, Optional[str]],
     ):
         """保存所有提示词回调"""
-        # 获取当前参数
-        current_params = self.model_params.get(model_name)
-        if current_params is None:
-            current_params = ModelParams(provider="default")
-
-        # 更新所有提示词并保存
+        # 只更新提示词配置
         await chat_settings_service.set_model_params(
             model_name=model_name,
-            temperature=current_params.temperature,
-            top_p=current_params.top_p,
-            top_k=current_params.top_k,
-            max_output_tokens=current_params.max_output_tokens,
-            presence_penalty=current_params.presence_penalty,
-            frequency_penalty=current_params.frequency_penalty,
-            thinking_budget_tokens=current_params.thinking_budget_tokens,
             system_prompt=prompts["system_prompt"],
             jailbreak_user_prompt=prompts["jailbreak_user_prompt"],
             jailbreak_model_response=prompts["jailbreak_model_response"],
             jailbreak_final_instruction=prompts["jailbreak_final_instruction"],
-            provider=current_params.provider,
         )
 
-        # 更新本地缓存
-        current_params.system_prompt = prompts["system_prompt"]
-        current_params.jailbreak_user_prompt = prompts["jailbreak_user_prompt"]
-        current_params.jailbreak_model_response = prompts["jailbreak_model_response"]
-        current_params.jailbreak_final_instruction = prompts[
-            "jailbreak_final_instruction"
-        ]
-        self.model_params[model_name] = current_params
+        # 重新加载配置以更新本地缓存
+        from src.chat.services.ai.config.models import get_model_config
+
+        updated_config = get_model_config(model_name)
+        if updated_config:
+            self.model_configs[model_name] = updated_config
 
         # 统计有多少提示词被设置
         set_count = sum(1 for v in prompts.values() if v is not None)
@@ -699,39 +713,34 @@ class ModelParamsView(View):
             await interaction.response.send_message("请先选择一个模型", ephemeral=True)
             return
 
-        current_params = self.model_params.get(self.selected_model)
-        if current_params is None:
-            current_params = ModelParams(provider="default")
+        current_config = self.model_configs.get(self.selected_model)
+        if current_config is None:
+            current_config = ModelConfig(
+                display_name=self.selected_model,
+                provider="default",
+                actual_model=self.selected_model,
+            )
 
         # 切换状态
         current_enabled = (
-            current_params.use_cache_optimized_build
-            if current_params.use_cache_optimized_build is not None
-            else (current_params.provider == "deepseek")
+            current_config.prompt_config.use_cache_optimized_build
+            if current_config.prompt_config.use_cache_optimized_build is not None
+            else (current_config.provider == "deepseek")
         )
         new_enabled = not current_enabled
 
-        # 保存到配置
+        # 只更新缓存优化设置
         await chat_settings_service.set_model_params(
             model_name=self.selected_model,
-            temperature=current_params.temperature,
-            top_p=current_params.top_p,
-            top_k=current_params.top_k,
-            max_output_tokens=current_params.max_output_tokens,
-            presence_penalty=current_params.presence_penalty,
-            frequency_penalty=current_params.frequency_penalty,
-            thinking_budget_tokens=current_params.thinking_budget_tokens,
-            system_prompt=current_params.system_prompt,
-            jailbreak_user_prompt=current_params.jailbreak_user_prompt,
-            jailbreak_model_response=current_params.jailbreak_model_response,
-            jailbreak_final_instruction=current_params.jailbreak_final_instruction,
-            provider=current_params.provider,
             use_cache_optimized_build=new_enabled,
         )
 
-        # 更新本地缓存
-        current_params.use_cache_optimized_build = new_enabled
-        self.model_params[self.selected_model] = current_params
+        # 重新加载配置以更新本地缓存
+        from src.chat.services.ai.config.models import get_model_config
+
+        updated_config = get_model_config(self.selected_model)
+        if updated_config:
+            self.model_configs[self.selected_model] = updated_config
 
         status_text = "开启" if new_enabled else "关闭"
         await interaction.response.send_message(

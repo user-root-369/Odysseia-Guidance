@@ -304,18 +304,25 @@ class ChatService:
                     user_id_for_settings=user_id_for_settings,
                 )
 
-            # 创建生成配置（从配置文件获取模型参数）
-            from src.chat.config.model_params import get_model_params
+            # 创建生成配置（从统一的 models_config.json 获取模型参数）
+            from src.chat.services.ai.config.models import get_generation_config
 
-            model_params = get_model_params(current_model)
+            gen_params = get_generation_config(current_model)
+            log.debug(
+                f"模型 {current_model} 生成参数: "
+                f"temperature={gen_params.temperature}, "
+                f"top_p={gen_params.top_p}, top_k={gen_params.top_k}, "
+                f"max_output_tokens={gen_params.max_output_tokens}, "
+                f"thinking_budget_tokens={gen_params.thinking_budget_tokens}"
+            )
             generation_config = GenerationConfig(
-                temperature=model_params.temperature,
-                top_p=model_params.top_p,
-                top_k=model_params.top_k,
-                max_output_tokens=model_params.max_output_tokens,
-                presence_penalty=model_params.presence_penalty,
-                frequency_penalty=model_params.frequency_penalty,
-                thinking_budget_tokens=model_params.thinking_budget_tokens,
+                temperature=gen_params.temperature,
+                top_p=gen_params.top_p,
+                top_k=gen_params.top_k,
+                max_output_tokens=gen_params.max_output_tokens,
+                presence_penalty=gen_params.presence_penalty,
+                frequency_penalty=gen_params.frequency_penalty,
+                thinking_budget_tokens=gen_params.thinking_budget_tokens,
             )
 
             # 调用 AIService
