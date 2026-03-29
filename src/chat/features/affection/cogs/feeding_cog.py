@@ -16,7 +16,10 @@ from src.chat.config import chat_config
 from src.chat.utils.prompt_utils import extract_persona_prompt, replace_emojis
 from src.config import DEVELOPER_USER_IDS
 from src.chat.features.affection.utils.interaction_checks import (
-    check_interaction_channel_availability,
+    check_command_availability,
+)
+from src.chat.features.chat_settings.services.chat_settings_service import (
+    chat_settings_service,
 )
 import logging
 
@@ -34,9 +37,9 @@ class FeedingCog(commands.Cog):
     @app_commands.command(name="投喂", description="在吃饭?给类脑娘来一口怎么样")
     @app_commands.describe(image="拍一下你这顿饭是什么吧!")
     async def feed(self, interaction: discord.Interaction, image: discord.Attachment):
-        # --- 交互可用性检查 ---
-        is_allowed, error_message = await check_interaction_channel_availability(
-            interaction
+        # --- 综合可用性检查（频道 + 帖子拥有者的命令设置）---
+        is_allowed, error_message = await check_command_availability(
+            interaction, "投喂"
         )
         if not is_allowed:
             await interaction.response.send_message(error_message, ephemeral=True)
@@ -89,10 +92,13 @@ class FeedingCog(commands.Cog):
 
             config = GenerationConfig(temperature=1.0, max_output_tokens=1024)
 
+            # 获取用户配置的 AI 模型
+            model_id = await chat_settings_service.get_current_ai_model()
+
             # 启用视觉转译（投喂功能需要识别图片内容）
             # 即使 Provider 不支持视觉，也会使用 Ollama Vision 进行转换
             result = await ai_service.generate(
-                messages=messages, config=config, enable_vision=True
+                messages=messages, config=config, model=model_id, enable_vision=True
             )
             response_text = result.content
 

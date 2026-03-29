@@ -90,7 +90,7 @@ class SimpleShopView(discord.ui.View):
         if self.shop_data.show_tutorial_button:
             self.add_item(KnowledgeBaseButton())
 
-        # 添加类脑娘的工作清单按钮
+        # 添加类脑娘的工作清单按钮（包含工具设置和命令设置）
         self.add_item(ToolListButton())
 
     async def on_timeout(self):

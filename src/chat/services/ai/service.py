@@ -961,6 +961,15 @@ class AIService:
         elif isinstance(obj, bytes):
             return f"<bytes: {len(obj)} bytes>"
         elif hasattr(obj, "__dict__"):
+            # 特殊处理 PIL Image 对象，只显示摘要信息
+            try:
+                from PIL import Image as PILImage
+
+                if isinstance(obj, PILImage.Image):
+                    return f"<PIL.Image: {obj.size[0]}x{obj.size[1]} {obj.mode} {obj.format or 'unknown'}>"
+            except ImportError:
+                pass
+
             _seen.add(obj_id)
             return {
                 k: AIService._serialize_for_logging(v, _seen)

@@ -402,6 +402,36 @@ class UserToolSettings(Base):
         return f"<UserToolSettings(user_id='{self.user_id}')>"
 
 
+class UserCommandSettings(Base):
+    """
+    存储每个用户的命令启用设置。
+    用户可以控制在自己的帖子里哪些命令可以使用。
+    默认启用所有命令，如果用户没有设置记录。
+    """
+
+    __tablename__ = "user_command_settings"
+    __table_args__ = {"schema": USER_SCHEMA}
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    user_id: Mapped[str] = mapped_column(
+        String(50), unique=True, nullable=False, comment="用户的Discord ID"
+    )
+    enabled_commands: Mapped[dict] = mapped_column(
+        JSON,
+        nullable=True,
+        comment="用户启用的命令列表（JSON格式），为null表示启用所有命令",
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    def __repr__(self):
+        return f"<UserCommandSettings(user_id='{self.user_id}')>"
+
+
 # --- 商店商品模型 (PostgreSQL) ---
 
 

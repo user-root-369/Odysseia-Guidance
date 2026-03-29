@@ -8,8 +8,10 @@ Gemini Provider - 支持 Gemini 官方 API 和自定义端点
 """
 
 import logging
+import io
 from typing import Optional, Dict, Any, List
 
+from PIL import Image
 from google import genai
 from google.genai import types as genai_types
 from google.genai import errors as genai_errors
@@ -551,6 +553,52 @@ class GeminiProvider(BaseProvider):
                             # 处理 dict 格式的 part
                             if "text" in item:
                                 parts.append(genai_types.Part(text=item["text"]))
+                            elif "image" in item and isinstance(
+                                item["image"], Image.Image
+                            ):
+                                # 处理 PIL Image 格式的图片（普通聊天使用的格式）
+                                pil_image = item["image"]
+                                source = item.get("source", "unknown")
+                                try:
+                                    # 将 PIL Image 转换为字节
+                                    buffer = io.BytesIO()
+                                    # 确定图片格式和 MIME 类型
+                                    img_format = pil_image.format or "PNG"
+                                    if img_format.upper() == "JPEG":
+                                        mime_type = "image/jpeg"
+                                    elif img_format.upper() == "GIF":
+                                        mime_type = "image/gif"
+                                    elif img_format.upper() == "WEBP":
+                                        mime_type = "image/webp"
+                                    else:
+                                        img_format = "PNG"
+                                        mime_type = "image/png"
+
+                                    # 处理图片模式
+                                    if pil_image.mode in ("P", "RGBA"):
+                                        if img_format == "JPEG":
+                                            pil_image = pil_image.convert("RGB")
+                                    elif (
+                                        pil_image.mode != "RGB" and img_format == "JPEG"
+                                    ):
+                                        pil_image = pil_image.convert("RGB")
+
+                                    pil_image.save(buffer, format=img_format)
+                                    image_bytes = buffer.getvalue()
+
+                                    parts.append(
+                                        genai_types.Part(
+                                            inline_data=genai_types.Blob(
+                                                mime_type=mime_type,
+                                                data=image_bytes,
+                                            )
+                                        )
+                                    )
+                                    log.debug(
+                                        f"已将 PIL Image 转换为 Gemini 格式，MIME: {mime_type}，来源: {source}"
+                                    )
+                                except Exception as e:
+                                    log.error(f"转换 PIL Image 到 Gemini 格式失败: {e}")
                         elif hasattr(item, "__str__"):
                             # 处理其他可转换为字符串的对象
                             item_str = str(item)
@@ -575,8 +623,24 @@ class GeminiProvider(BaseProvider):
                                 text = item.get("text", "")
                                 if text:
                                     parts.append(genai_types.Part(text=text))
+                            elif item.get("type") == "image":
+                                # 处理 image_bytes 格式的图片（投喂命令使用的格式）
+                                image_bytes = item.get("image_bytes")
+                                mime_type = item.get("mime_type", "image/png")
+                                if image_bytes:
+                                    try:
+                                        parts.append(
+                                            genai_types.Part(
+                                                inline_data=genai_types.Blob(
+                                                    mime_type=mime_type,
+                                                    data=image_bytes,
+                                                )
+                                            )
+                                        )
+                                    except Exception as e:
+                                        log.error(f"处理 image_bytes 图片失败: {e}")
                             elif item.get("type") == "image_url":
-                                # 处理图片
+                                # 处理 image_url 格式的图片
                                 image_data = item.get("image_url", {})
                                 if isinstance(image_data, dict):
                                     url = image_data.get("url", "")

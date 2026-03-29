@@ -1116,21 +1116,35 @@ class ToolListButton(ShopButton["SimpleShopView"]):
 
 
 class ToolSettingsView(discord.ui.View):
-    """管理用户工具设置的视图。"""
+    """管理用户工具设置和命令设置的视图。"""
+
+    # 模式常量
+    MODE_TOOLS = "tools"
+    MODE_COMMANDS = "commands"
 
     def __init__(self, main_view: "SimpleShopView"):
         super().__init__(timeout=300)
         self.main_view = main_view
         self.user: discord.User | discord.Member | None = None
-        self.user_settings: Dict[str, Any] | None = None
+        self.current_mode: str = self.MODE_TOOLS  # 默认显示工具设置
+
+        # 工具设置相关
+        self.user_tool_settings: Dict[str, Any] | None = None
         self.all_tools: Dict[str, Dict[str, Any]] = {}
         self.protected_tools: List[str] = []
+
+        # 命令设置相关
+        self.user_command_settings: Dict[str, Any] | None = None
+        self.all_commands: Dict[str, Dict[str, str]] = {}
+
         self.confirmation_message: str | None = None
 
     async def initialize(self, user: discord.User | discord.Member):
         self.user = user
-        self.user_settings = await user_tool_settings_service.get_user_tool_settings(
-            str(user.id)
+
+        # 初始化工具设置
+        self.user_tool_settings = (
+            await user_tool_settings_service.get_user_tool_settings(str(user.id))
         )
         self.all_tools = get_all_tools_metadata()
         # 获取系统保留的工具列表（用户无法禁用）
@@ -1139,33 +1153,87 @@ class ToolSettingsView(discord.ui.View):
         )
 
         self.protected_tools = await global_tool_settings_service.get_protected_tools()
+
+        # 初始化命令设置
+        from src.chat.features.affection.services.user_command_settings_service import (
+            user_command_settings_service,
+        )
+
+        self.user_command_settings = (
+            await user_command_settings_service.get_user_command_settings(str(user.id))
+        )
+        self.all_commands = user_command_settings_service.get_configurable_commands()
+
         self.add_components()
 
     def add_components(self):
-        """根据当前状态向视图添加组件。"""
+        """根据当前模式向视图添加组件。"""
         self.clear_items()
-        self.add_item(
-            ToolToggleSelect(self.all_tools, self.user_settings, self.protected_tools)
+
+        if self.current_mode == self.MODE_TOOLS:
+            self.add_item(
+                ToolToggleSelect(
+                    self.all_tools, self.user_tool_settings, self.protected_tools
+                )
+            )
+        else:
+            self.add_item(
+                CommandToggleSelect(self.all_commands, self.user_command_settings)
+            )
+
+        # 添加模式切换按钮
+        switch_button = discord.ui.Button(
+            label="切换到命令设置"
+            if self.current_mode == self.MODE_TOOLS
+            else "切换到工具设置",
+            style=discord.ButtonStyle.primary,
+            emoji="🔄",
+            row=1,
         )
+        switch_button.callback = self.switch_mode_callback
+        self.add_item(switch_button)
 
         back_button = discord.ui.Button(
-            label="返回商店", style=discord.ButtonStyle.secondary, emoji="⬅️"
+            label="返回商店", style=discord.ButtonStyle.secondary, emoji="⬅️", row=1
         )
         back_button.callback = self.back_callback
         self.add_item(back_button)
 
+    async def switch_mode_callback(self, interaction: discord.Interaction):
+        """切换工具/命令设置模式。"""
+        if self.current_mode == self.MODE_TOOLS:
+            self.current_mode = self.MODE_COMMANDS
+        else:
+            self.current_mode = self.MODE_TOOLS
+
+        self.add_components()
+        embed = await self.create_embed()
+        await interaction.response.edit_message(embed=embed, view=self)
+
     async def create_embed(self) -> discord.Embed:
-        """创建工具设置的嵌入消息。"""
-        description = "在这里可以设置类脑娘在你的帖子里能使用哪些工具哦～\n默认情况下所有工具都是开启的。"
+        """根据当前模式创建嵌入消息。"""
+        if self.current_mode == self.MODE_TOOLS:
+            title = "🗒️ 类脑娘的工作清单 - 工具设置"
+            description = "在这里可以设置类脑娘在你的帖子里能使用哪些工具哦～\n默认情况下所有工具都是开启的。"
+        else:
+            title = "🗒️ 类脑娘的工作清单 - 命令设置"
+            description = (
+                "在这里可以设置其他人在你的帖子里能使用哪些命令哦～\n"
+                "默认情况下所有命令都是开启的。\n"
+                "⚠️ 注意：这些设置只影响**你的帖子**中别人使用的命令，不影响你自己使用命令。"
+            )
+
         if self.confirmation_message:
             description = f"✅ {self.confirmation_message}\n\n{description}"
             # 重置消息，以便下次更新时不显示
             self.confirmation_message = None
 
         embed = discord.Embed(
-            title="🗒️ 类脑娘的工作清单",
+            title=title,
             description=description,
-            color=discord.Color.blue(),
+            color=discord.Color.blue()
+            if self.current_mode == self.MODE_TOOLS
+            else discord.Color.purple(),
         )
         return embed
 
@@ -1225,11 +1293,73 @@ class ToolToggleSelect(discord.ui.Select):
         )
 
         # 更新视图中的用户设置
-        view.user_settings = await user_tool_settings_service.get_user_tool_settings(
-            user_id
+        view.user_tool_settings = (
+            await user_tool_settings_service.get_user_tool_settings(user_id)
         )
 
         # 设置确认消息并更新原始消息
+        view.confirmation_message = "工具设置已保存！"
+        view.add_components()
+        embed = await view.create_embed()
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class CommandToggleSelect(discord.ui.Select):
+    """用于启用/禁用命令的选择菜单。"""
+
+    def __init__(
+        self,
+        all_commands: Dict[str, Dict[str, str]],
+        user_settings: Dict[str, Any] | None,
+    ):
+        options = []
+        enabled_commands = (
+            user_settings.get("enabled_commands") if user_settings else None
+        )
+
+        for cmd_name, meta in all_commands.items():
+            # 如果 user_settings 为 None，则默认启用所有命令。
+            # 如果数据库中的 enabled_commands 为 None，则默认启用所有命令。
+            is_enabled = enabled_commands is None or cmd_name in enabled_commands
+            options.append(
+                discord.SelectOption(
+                    label=meta["name"],
+                    value=cmd_name,
+                    description=meta["description"],
+                    emoji=meta.get("emoji"),
+                    default=is_enabled,
+                )
+            )
+
+        super().__init__(
+            placeholder="选择要在你的帖子里开启的命令...",
+            min_values=0,
+            max_values=len(options),
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        from src.chat.features.affection.services.user_command_settings_service import (
+            user_command_settings_service,
+        )
+
+        view = cast(ToolSettingsView, self.view)
+        user_id = str(interaction.user.id)
+
+        # 将UI中选择的命令保存到数据库
+        new_enabled_set = set(self.values) if self.values else set()
+
+        await user_command_settings_service.save_user_command_settings(
+            user_id, {"enabled_commands": list(new_enabled_set)}
+        )
+
+        # 更新视图中的用户命令设置
+        view.user_command_settings = (
+            await user_command_settings_service.get_user_command_settings(user_id)
+        )
+
+        # 设置确认消息并更新原始消息
+        view.confirmation_message = "命令设置已保存！"
         view.add_components()
         embed = await view.create_embed()
         await interaction.response.edit_message(embed=embed, view=view)

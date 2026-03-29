@@ -18,7 +18,10 @@ from src.chat.utils.prompt_utils import replace_emojis
 from src.config import DEVELOPER_USER_IDS
 from src.chat.services.event_service import event_service
 from src.chat.features.affection.utils.interaction_checks import (
-    check_interaction_channel_availability,
+    check_command_availability,
+)
+from src.chat.features.chat_settings.services.chat_settings_service import (
+    chat_settings_service,
 )
 
 
@@ -35,9 +38,9 @@ class ConfessionCog(commands.Cog):
     @app_commands.rename(content="忏悔内容")
     @app_commands.describe(content="写下你的忏悔内容。")
     async def confess(self, interaction: discord.Interaction, content: str):
-        # --- 交互可用性检查 ---
-        is_allowed, error_message = await check_interaction_channel_availability(
-            interaction
+        # --- 综合可用性检查（频道 + 帖子拥有者的命令设置）---
+        is_allowed, error_message = await check_command_availability(
+            interaction, "忏悔"
         )
         if not is_allowed:
             await interaction.response.send_message(error_message, ephemeral=True)
@@ -110,9 +113,12 @@ class ConfessionCog(commands.Cog):
                 affection_level=level_name,
             )
 
+            # 获取用户配置的 AI 模型
+            model_id = await chat_settings_service.get_current_ai_model()
+
             # 使用 ai_service.generate() 方法
             messages = [{"role": "user", "content": formatted_prompt}]
-            result = await ai_service.generate(messages=messages)
+            result = await ai_service.generate(messages=messages, model=model_id)
             ai_response = result.content
 
             if not ai_response:
