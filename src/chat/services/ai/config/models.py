@@ -358,24 +358,25 @@ def get_available_models() -> List[str]:
 
 # 故障转移优先级配置
 # 这个配置保留在代码中，因为它是系统行为配置，不是模型定义
+# 注意：gemini_official 需要有效的 Google API 密钥，如果没有配置请从列表中移除
 FALLBACK_PRIORITY: Dict[str, List[str]] = {
     # 当使用 Gemini 自定义端点失败时
     "gemini_custom": [
         "deepseek",  # 首选 DeepSeek
         "openai_compatible",  # 其次 OpenAI 兼容端点
-        "gemini_official",  # 最后回退到 Gemini 官方
+        # "gemini_official",  # 已禁用：需要有效的 Google API 密钥
     ],
     # 当使用 DeepSeek 失败时
     "deepseek": [
         "gemini_custom",
         "openai_compatible",
-        "gemini_official",
+        # "gemini_official",  # 已禁用：需要有效的 Google API 密钥
     ],
     # 当使用 OpenAI 兼容端点失败时
     "openai_compatible": [
         "deepseek",
         "gemini_custom",
-        "gemini_official",
+        # "gemini_official",  # 已禁用：需要有效的 Google API 密钥
     ],
     # 当使用 Gemini 官方失败时
     "gemini_official": [

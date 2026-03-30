@@ -343,7 +343,8 @@ class ChatSettingsView(View):
         if full_model_id:
             provider, model = AIModelSettingsView.parse_full_model_id(full_model_id)
             if provider and model:
-                await self.service.set_ai_model_with_provider(provider, model)
+                # 直接存模型名，不带 provider 前缀
+                await self.service.set_ai_model(model)
 
     async def on_show_token_usage(self, interaction: Interaction):
         """显示今天的 Token 使用情况。"""

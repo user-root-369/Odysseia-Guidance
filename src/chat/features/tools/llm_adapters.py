@@ -144,17 +144,27 @@ def to_gemini_tools(declarations: List[ToolDeclaration]) -> List:
     except ImportError:
         raise ImportError("需要安装 google-genai: pip install google-genai")
 
+    log.info(f"[Gemini 工具转换] 开始转换 {len(declarations)} 个工具为 Gemini 格式")
+
     fn_declarations = []
     for decl in declarations:
         try:
             fn_decl = to_gemini_function_declaration(decl)
             fn_declarations.append(fn_decl)
+            log.debug(f"[Gemini 工具转换] 成功转换工具 '{decl.name}'")
         except Exception as e:
-            log.error(f"转换工具 '{decl.name}' 为 Gemini 格式时出错: {e}")
+            log.error(
+                f"转换工具 '{decl.name}' 为 Gemini 格式时出错: {e}", exc_info=True
+            )
             continue
 
     # Gemini 的 Tool 是一个包含多个 FunctionDeclaration 的容器
-    return [types.Tool(function_declarations=fn_declarations)]
+    result = [types.Tool(function_declarations=fn_declarations)]
+    log.info(
+        f"[Gemini 工具转换] 转换完成，返回 {len(result)} 个 Tool，"
+        f"包含 {len(fn_declarations)} 个 FunctionDeclaration"
+    )
+    return result
 
 
 # ==================== OpenAI 适配器 ====================

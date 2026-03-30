@@ -263,6 +263,12 @@ class ChatService:
 
             # 获取当前模型对应的 Provider 类型
             provider_name = ai_service._model_to_provider.get(current_model)
+            # 调试日志：打印模型到 Provider 的映射
+            log.info(
+                f"[Provider 映射调试] current_model={repr(current_model)}, "
+                f"provider_name={repr(provider_name)}, "
+                f"_model_to_provider={ai_service._model_to_provider}"
+            )
 
             # 根据 Provider 类型确定输出格式（使用统一的格式判断工具）
             message_format = ProviderFormat.get_message_format(provider_name or "")

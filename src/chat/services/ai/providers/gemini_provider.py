@@ -337,6 +337,29 @@ class GeminiProvider(BaseProvider):
             # 工具格式已由 ToolService.get_dynamic_tools_for_context() 统一转换
             # Gemini Provider 接收的是 List[types.Tool] 格式
             if tools:
+                # 调试日志：检查传入的工具格式
+                log.info(
+                    f"[Gemini Provider 工具调试] 收到 {len(tools)} 个工具，"
+                    f"第一个工具类型={type(tools[0]) if tools else 'N/A'}"
+                )
+                if tools:
+                    first_tool = tools[0]
+                    # 检查是否是 OpenAI 格式（字典，包含 type 和 function 键）
+                    if isinstance(first_tool, dict):
+                        log.warning(
+                            f"[Gemini Provider 工具调试] 警告：收到的是 OpenAI 格式工具！"
+                            f"工具内容: {list(first_tool.keys())}"
+                        )
+                    elif hasattr(first_tool, "function_declarations"):
+                        log.info(
+                            f"[Gemini Provider 工具调试] 正确：收到 Gemini 格式工具，"
+                            f"包含 {len(first_tool.function_declarations)} 个函数声明"
+                        )
+                    else:
+                        log.warning(
+                            f"[Gemini Provider 工具调试] 警告：未知的工具格式！"
+                            f"类型={type(first_tool)}"
+                        )
                 gen_config.tools = tools
                 gen_config.automatic_function_calling = (
                     genai_types.AutomaticFunctionCallingConfig(disable=True)

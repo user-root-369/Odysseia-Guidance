@@ -161,18 +161,38 @@ class ToolService:
             )
 
         # 根据 provider 类型选择返回格式（使用统一的格式判断工具）
-        if ProviderFormat.is_gemini_provider(provider_type or ""):
+        # 调试日志：打印 provider_type 和判断结果
+        actual_provider_type = provider_type or ""
+        is_gemini = ProviderFormat.is_gemini_provider(actual_provider_type)
+        log.info(
+            f"[工具格式调试] provider_type={repr(provider_type)}, "
+            f"actual_provider_type={repr(actual_provider_type)}, "
+            f"is_gemini_provider={is_gemini}"
+        )
+
+        if is_gemini:
             # Gemini Provider: 返回 genai_types.Tool 格式
             log.info(
                 f"为 Gemini Provider 返回工具（共 {len(filtered_declarations)} 个）"
             )
-            return to_gemini_tools(filtered_declarations)
+            gemini_tools = to_gemini_tools(filtered_declarations)
+            # 调试日志：打印返回的工具类型
+            log.info(
+                f"[工具格式调试] 返回 Gemini 工具，类型={type(gemini_tools)}, "
+                f"第一个工具类型={type(gemini_tools[0]) if gemini_tools else 'N/A'}"
+            )
+            return gemini_tools
         else:
             # 其他 Provider (DeepSeek, OpenAI 等): 返回 OpenAI 格式
             log.info(
                 f"为 OpenAI 兼容 Provider 返回工具（共 {len(filtered_declarations)} 个）"
             )
-            return [decl.to_openai_format() for decl in filtered_declarations]
+            openai_tools = [decl.to_openai_format() for decl in filtered_declarations]
+            # 调试日志：打印返回的工具内容
+            log.info(
+                f"[工具格式调试] 返回 OpenAI 工具，第一个工具={openai_tools[0] if openai_tools else 'N/A'}"
+            )
+            return openai_tools
 
     def get_tool_declarations(self) -> List[ToolDeclaration]:
         """
