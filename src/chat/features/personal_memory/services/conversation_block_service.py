@@ -502,9 +502,9 @@ class ConversationBlockService:
         session: Optional[AsyncSession] = None,
     ) -> tuple[List[ConversationBlock], bool]:
         """
-        检查是否有足够的未总结对话块，如果有2个或更多则返回最早的2个。
+        检查是否有足够的未总结对话块，如果达到阈值则返回最早的对应对话块。
 
-        用于方案E：每2个新块触发一次印象总结。
+        用于方案E：每 N 个新块触发一次印象总结（N 由配置决定）。
 
         Args:
             discord_id: 用户 Discord ID
@@ -512,23 +512,26 @@ class ConversationBlockService:
 
         Returns:
             (blocks_to_summarize, should_summarize)
-            - blocks_to_summarize: 需要总结的对话块列表（最多2个）
+            - blocks_to_summarize: 需要总结的对话块列表
             - should_summarize: 是否应该触发总结
         """
+        # 从配置获取触发总结的对话块阈值
+        summary_trigger = self.config.get("summary_trigger_blocks", 2)
+
         unsummarized = await self.get_unsummarized_blocks(discord_id, session)
 
-        if len(unsummarized) >= 2:
-            # 返回最早的2个未总结块
-            blocks_to_summarize = unsummarized[:2]
+        if len(unsummarized) >= summary_trigger:
+            # 返回最早的 N 个未总结块
+            blocks_to_summarize = unsummarized[:summary_trigger]
             log.info(
                 f"用户 {discord_id} 有 {len(unsummarized)} 个未总结的对话块，"
-                f"将总结最早的2个: {[b.id for b in blocks_to_summarize]}"
+                f"将总结最早的 {summary_trigger} 个: {[b.id for b in blocks_to_summarize]}"
             )
             return blocks_to_summarize, True
         else:
             log.debug(
                 f"用户 {discord_id} 有 {len(unsummarized)} 个未总结的对话块，"
-                f"暂不触发总结（需要至少2个）"
+                f"暂不触发总结（需要至少 {summary_trigger} 个）"
             )
             return [], False
 

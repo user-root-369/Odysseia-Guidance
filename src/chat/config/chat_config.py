@@ -336,6 +336,8 @@ CONVERSATION_MEMORY_CONFIG = {
     "top_k_fts": 10,  # BM25搜索返回数量
     "rrf_k": 60,  # RRF 融合常数
     "max_vector_distance": 0.65,  # 向量距离阈值 (余弦距离)
+    # 印象总结配置
+    "summary_trigger_blocks": 2,  # 每积累多少个未总结的对话块时触发印象总结
 }
 
 

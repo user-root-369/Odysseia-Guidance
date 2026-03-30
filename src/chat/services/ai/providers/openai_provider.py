@@ -328,6 +328,106 @@ class OpenAICompatibleProvider(BaseProvider):
             log.error(f"生成嵌入失败: {e}")
             return None
 
+    def _convert_messages_to_openai_format(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        将消息转换为 OpenAI 兼容格式
+
+        支持两种输入格式：
+        - OpenAI 格式: {"role": "user", "content": "text"}
+        - Gemini 格式: {"role": "user", "parts": ["text"]} 或 {"role": "user", "parts": [{"text": "..."}]}
+
+        Args:
+            messages: 消息列表
+
+        Returns:
+            List[Dict]: OpenAI 兼容格式的消息列表
+        """
+        converted_messages = []
+
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content")
+            parts = msg.get("parts")
+
+            # 转换角色 (model -> assistant)
+            openai_role = "assistant" if role == "model" else role
+
+            # 如果已经有 content 字段且是字符串，直接使用
+            if content is not None and isinstance(content, str):
+                converted_messages.append(
+                    {
+                        "role": openai_role,
+                        "content": content,
+                    }
+                )
+                continue
+
+            # 如果 content 是列表（OpenAI 多部分格式）
+            if content is not None and isinstance(content, list):
+                # 提取文本内容
+                text_parts = []
+                for item in content:
+                    if isinstance(item, str):
+                        text_parts.append(item)
+                    elif isinstance(item, dict) and item.get("type") == "text":
+                        text_parts.append(item.get("text", ""))
+
+                if text_parts:
+                    converted_messages.append(
+                        {
+                            "role": openai_role,
+                            "content": "\n".join(text_parts),
+                        }
+                    )
+                continue
+
+            # 处理 Gemini 格式 (parts 字段)
+            if parts is not None:
+                text_parts = []
+                if isinstance(parts, list):
+                    for item in parts:
+                        if isinstance(item, str):
+                            if item:  # 跳过空字符串
+                                text_parts.append(item)
+                        elif isinstance(item, dict) and "text" in item:
+                            text = item["text"]
+                            if text:
+                                text_parts.append(text)
+                elif isinstance(parts, str):
+                    if parts:
+                        text_parts.append(parts)
+
+                if text_parts:
+                    converted_messages.append(
+                        {
+                            "role": openai_role,
+                            "content": "\n".join(text_parts),
+                        }
+                    )
+                else:
+                    # 如果 parts 为空，添加一个空内容消息以避免 API 错误
+                    log.warning(f"消息 parts 为空，将使用占位符内容: {msg}")
+                    converted_messages.append(
+                        {
+                            "role": openai_role,
+                            "content": " ",  # 使用空格作为占位符
+                        }
+                    )
+                continue
+
+            # 如果既没有 content 也没有 parts，记录警告并添加占位符
+            log.warning(f"消息缺少 content 和 parts 字段: {msg}")
+            converted_messages.append(
+                {
+                    "role": openai_role,
+                    "content": " ",  # 使用空格作为占位符
+                }
+            )
+
+        return converted_messages
+
     def _build_request_body(
         self,
         messages: List[Dict[str, Any]],
@@ -347,9 +447,12 @@ class OpenAICompatibleProvider(BaseProvider):
         Returns:
             Dict: API 请求体
         """
+        # 转换消息格式为 OpenAI 兼容格式
+        converted_messages = self._convert_messages_to_openai_format(messages)
+
         body: Dict[str, Any] = {
             "model": model,
-            "messages": messages,
+            "messages": converted_messages,
             "temperature": config.temperature,
             "top_p": config.top_p,
             "max_tokens": config.max_output_tokens,
