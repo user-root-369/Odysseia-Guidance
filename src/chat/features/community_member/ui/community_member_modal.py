@@ -16,10 +16,12 @@ VOTE_EMOJI = REVIEW_SETTINGS["vote_emoji"]
 REJECT_EMOJI = REVIEW_SETTINGS["reject_emoji"]
 
 
-class CommunityMemberUploadModal(discord.ui.Modal, title="上传社区成员档案"):
+class CommunityMemberUploadModal(
+    discord.ui.Modal, title="📝 填写你的名片~这个会发到公屏让大家审核哦!"
+):
     """用于用户上传社区成员档案的模态窗口"""
 
-    def __init__(self, purchase_info: Dict[str, Any] = None):
+    def __init__(self, purchase_info: Dict[str, Any] | None = None):
         super().__init__()
         self.purchase_info = purchase_info
 
