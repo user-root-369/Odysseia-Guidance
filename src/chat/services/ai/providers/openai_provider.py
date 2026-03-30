@@ -334,9 +334,12 @@ class OpenAICompatibleProvider(BaseProvider):
         """
         将消息转换为 OpenAI 兼容格式
 
-        支持两种输入格式：
+        支持多种输入格式：
         - OpenAI 格式: {"role": "user", "content": "text"}
         - Gemini 格式: {"role": "user", "parts": ["text"]} 或 {"role": "user", "parts": [{"text": "..."}]}
+        - 工具调用格式: {"role": "assistant", "tool_calls": [...]}
+        - 工具结果格式: {"role": "tool", "tool_call_id": "...", "content": "..."}
+        - Gemini 原生对象: genai_types.Content（包含 function_call / function_response）
 
         Args:
             messages: 消息列表
@@ -347,14 +350,73 @@ class OpenAICompatibleProvider(BaseProvider):
         converted_messages = []
 
         for msg in messages:
+            # 处理 Gemini 原生 Content 对象（genai_types.Content）
+            if hasattr(msg, "role") and hasattr(msg, "parts"):
+                converted = self._convert_gemini_content_object(msg)
+                if converted:
+                    converted_messages.append(converted)
+                continue
+
             role = msg.get("role", "user")
             content = msg.get("content")
             parts = msg.get("parts")
-
+            tool_calls = msg.get("tool_calls")
+            tool_call_id = msg.get("tool_call_id")
+            name = msg.get("name")
             # 转换角色 (model -> assistant)
             openai_role = "assistant" if role == "model" else role
 
-            # 如果已经有 content 字段且是字符串，直接使用
+            # 1. 处理工具结果消息 (role == "tool")
+            if openai_role == "tool" and tool_call_id:
+                tool_msg: Dict[str, Any] = {
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": content
+                    if isinstance(content, str)
+                    else json.dumps(content, ensure_ascii=False)
+                    if content
+                    else "",
+                }
+                if name:
+                    tool_msg["name"] = name
+                converted_messages.append(tool_msg)
+                continue
+
+            # 2. 处理包含工具调用的助手消息
+            if tool_calls:
+                assistant_msg: Dict[str, Any] = {
+                    "role": "assistant",
+                    "content": content if isinstance(content, str) else (content or ""),
+                    "tool_calls": [],
+                }
+                for call in tool_calls:
+                    if isinstance(call, dict):
+                        # 已经是 OpenAI 格式的 tool_call
+                        if "type" in call and "function" in call:
+                            assistant_msg["tool_calls"].append(call)
+                        # 内部格式: {"id": ..., "name": ..., "arguments": {...}}
+                        elif "id" in call and "name" in call:
+                            assistant_msg["tool_calls"].append(
+                                {
+                                    "id": call["id"],
+                                    "type": "function",
+                                    "function": {
+                                        "name": call["name"],
+                                        "arguments": json.dumps(
+                                            call.get("arguments", {}),
+                                            ensure_ascii=False,
+                                        ),
+                                    },
+                                }
+                            )
+                        else:
+                            log.warning(f"未知的 tool_call 格式: {call}")
+                    else:
+                        log.warning(f"非字典类型的 tool_call: {type(call)}")
+                converted_messages.append(assistant_msg)
+                continue
+
+            # 3. 如果已经有 content 字段且是字符串，直接使用
             if content is not None and isinstance(content, str):
                 converted_messages.append(
                     {
@@ -364,7 +426,7 @@ class OpenAICompatibleProvider(BaseProvider):
                 )
                 continue
 
-            # 如果 content 是列表（OpenAI 多部分格式）
+            # 4. 如果 content 是列表（OpenAI 多部分格式）
             if content is not None and isinstance(content, list):
                 # 提取文本内容
                 text_parts = []
@@ -383,7 +445,7 @@ class OpenAICompatibleProvider(BaseProvider):
                     )
                 continue
 
-            # 处理 Gemini 格式 (parts 字段)
+            # 5. 处理 Gemini 格式 (parts 字段)
             if parts is not None:
                 text_parts = []
                 if isinstance(parts, list):
@@ -417,7 +479,7 @@ class OpenAICompatibleProvider(BaseProvider):
                     )
                 continue
 
-            # 如果既没有 content 也没有 parts，记录警告并添加占位符
+            # 6. 如果既没有 content 也没有 parts，记录警告并添加占位符
             log.warning(f"消息缺少 content 和 parts 字段: {msg}")
             converted_messages.append(
                 {
@@ -427,6 +489,87 @@ class OpenAICompatibleProvider(BaseProvider):
             )
 
         return converted_messages
+
+    def _convert_gemini_content_object(
+        self, content_obj: Any
+    ) -> Optional[Dict[str, Any]]:
+        """
+        将 Gemini 原生 Content 对象 (genai_types.Content) 转换为 OpenAI 消息格式
+
+        处理以下情况：
+        - 包含 function_call 的 Content → assistant 消息 + tool_calls
+        - 包含 function_response 的 Content → tool 消息
+        - 包含纯文本的 Content → assistant/user 消息
+
+        Args:
+            content_obj: Gemini genai_types.Content 对象
+
+        Returns:
+            Optional[Dict]: OpenAI 格式的消息，如果无法转换则返回 None
+        """
+        try:
+            role = getattr(content_obj, "role", "user")
+            openai_role = "assistant" if role == "model" else role
+            parts = getattr(content_obj, "parts", [])
+
+            if not parts:
+                return None
+
+            # 检查是否包含 function_call
+            function_calls = []
+            text_parts = []
+            for part in parts:
+                if hasattr(part, "function_call") and part.function_call:
+                    fc = part.function_call
+                    call_id = getattr(fc, "id", None) or f"call_{id(fc)}"
+                    function_calls.append(
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {
+                                "name": fc.name,
+                                "arguments": json.dumps(
+                                    dict(fc.args) if fc.args else {},
+                                    ensure_ascii=False,
+                                ),
+                            },
+                        }
+                    )
+                elif hasattr(part, "function_response") and part.function_response:
+                    fr = part.function_response
+                    response_content = json.dumps(
+                        dict(fr.response) if fr.response else {},
+                        ensure_ascii=False,
+                    )
+                    return {
+                        "role": "tool",
+                        "tool_call_id": getattr(fr, "id", None) or f"call_{id(fr)}",
+                        "name": fr.name,
+                        "content": response_content,
+                    }
+                elif hasattr(part, "text") and part.text:
+                    text_parts.append(part.text)
+
+            # 如果有 function_calls，返回带 tool_calls 的 assistant 消息
+            if function_calls:
+                return {
+                    "role": "assistant",
+                    "content": "\n".join(text_parts) if text_parts else "",
+                    "tool_calls": function_calls,
+                }
+
+            # 纯文本消息
+            if text_parts:
+                return {
+                    "role": openai_role,
+                    "content": "\n".join(text_parts),
+                }
+
+            return None
+
+        except Exception as e:
+            log.warning(f"转换 Gemini Content 对象失败: {e}")
+            return None
 
     def _build_request_body(
         self,

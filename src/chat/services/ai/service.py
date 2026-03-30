@@ -555,7 +555,9 @@ class AIService:
                     f"tool_service={self._tool_service is not None}, "
                     f"user_id={user_id_for_settings}"
                 )
-                if tool_executor and self._tool_service and user_id_for_settings:
+                # 注意：user_id_for_settings 可以为 None，此时 get_dynamic_tools_for_context
+                # 会返回默认工具集（只应用全局设置，不过滤用户特定设置）
+                if tool_executor and self._tool_service:
                     try:
                         fallback_tools = (
                             await self._tool_service.get_dynamic_tools_for_context(
@@ -563,7 +565,8 @@ class AIService:
                             )
                         )
                         log.info(
-                            f"故障转移时为 Provider '{fallback_name}' 重新获取了 {len(fallback_tools)} 个工具"
+                            f"故障转移时为 Provider '{fallback_name}' 重新获取了 {len(fallback_tools)} 个工具 "
+                            f"(user_id={user_id_for_settings or '默认'})"
                         )
                     except Exception as tool_error:
                         log.warning(
@@ -573,8 +576,7 @@ class AIService:
                 else:
                     log.info(
                         f"故障转移时不使用工具: tool_executor={tool_executor is not None}, "
-                        f"tool_service={self._tool_service is not None}, "
-                        f"user_id={user_id_for_settings}"
+                        f"tool_service={self._tool_service is not None}"
                     )
 
                 if tool_executor and fallback_tools:
