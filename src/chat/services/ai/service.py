@@ -58,9 +58,6 @@ class AIService:
         self._available_tools: List[Any] = []
         self._tool_map: Dict[str, Any] = {}
 
-        # 最后调用的工具列表
-        self.last_called_tools: List[str] = []
-
         # 初始化 Providers
         self._initialize_providers()
 

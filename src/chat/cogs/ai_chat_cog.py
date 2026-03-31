@@ -3,14 +3,12 @@
 import discord
 from discord.ext import commands
 import logging
-from typing import Optional
 import re
 import io
 
 # 导入新的 Service
-from src.chat.services.chat_service import chat_service
+from src.chat.services.chat_service import chat_service, ChatResult
 from src.chat.services.message_processor import message_processor
-from src.chat.services.ai.service import ai_service
 from src.chat.features.tools.functions.summarize_channel import text_to_summary_image
 
 
@@ -89,20 +87,18 @@ class AIChatCog(commands.Cog):
             return
 
         # 显示"正在输入"状态，直到AI响应生成完毕
-        response_text = None
+        chat_result: ChatResult | None = None
         async with message.channel.typing():
             # 注意：这里我们将已经处理过的数据传递下去
-            response_text = await self.handle_chat_message(message, processed_data)
+            chat_result = await self.handle_chat_message(message, processed_data)
 
         # 在退出 typing 状态后发送回复
-        if response_text:
+        if chat_result and chat_result.content:
+            response_text = chat_result.content
             try:
                 # --- 响应发送逻辑 ---
-                # 动态获取上次调用的工具列表，如果不存在则为空列表
-                last_tools = getattr(ai_service, "last_called_tools", [])
-
                 # 1. 如果调用了总结工具，总是转换为图片发送
-                if "summarize_channel" in last_tools:
+                if "summarize_channel" in chat_result.tools_called:
                     log.info("调用了总结工具, 尝试转为图片发送。")
                     image_bytes = text_to_summary_image(response_text)
                     if image_bytes:
@@ -165,7 +161,7 @@ class AIChatCog(commands.Cog):
 
     async def handle_chat_message(
         self, message: discord.Message, processed_data: dict
-    ) -> Optional[str]:
+    ) -> ChatResult | None:
         """
         处理聊天消息（包括私聊和@mention），协调各个服务生成AI回复并返回其内容
         """
@@ -177,7 +173,7 @@ class AIChatCog(commands.Cog):
             guild_name = message.guild.name if message.guild else "私信"
             location_name = ""
             if isinstance(message.channel, discord.Thread):
-                # 如果是帖子（子区），显示“父频道 -> 帖子名”
+                # 如果是帖子（子区），显示"父频道 -> 帖子名"
                 parent_channel_name = (
                     message.channel.parent.name
                     if message.channel.parent
@@ -191,17 +187,17 @@ class AIChatCog(commands.Cog):
                 # 否则（如私信），提供一个默认值
                 location_name = "私信中"
 
-            final_response = await chat_service.handle_chat_message(
+            chat_result = await chat_service.handle_chat_message(
                 message, processed_data, guild_name, location_name
             )
 
-            # 3. 返回回复内容
-            return final_response
+            # 3. 返回回复结果
+            return chat_result
 
         except Exception as e:
             log.error(f"[AIChatCog] 处理@mention消息时发生顶层错误: {e}", exc_info=True)
             # 确保即使发生意外错误也有反馈
-            return "抱歉，处理你的请求时遇到了一个未知错误。"
+            return ChatResult(content="抱歉，处理你的请求时遇到了一个未知错误。")
 
 
 async def setup(bot: commands.Bot):

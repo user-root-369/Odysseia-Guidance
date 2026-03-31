@@ -2,7 +2,8 @@
 
 import discord
 import logging
-from typing import Dict, Any, Optional
+from dataclasses import dataclass, field
+from typing import Dict, Any, List, Optional
 import discord.abc
 
 # 导入所需的服务
@@ -29,6 +30,20 @@ from src.chat.services.ai.providers.base import GenerationConfig
 from src.chat.services.ai.providers.provider_format import ProviderFormat, MessageFormat
 
 log = logging.getLogger(__name__)
+
+
+@dataclass
+class ChatResult:
+    """
+    聊天响应结果，包含回复内容和工具调用元数据。
+
+    Attributes:
+        content: AI 生成的回复文本
+        tools_called: 本次请求中 AI 调用过的工具名称列表
+    """
+
+    content: str
+    tools_called: List[str] = field(default_factory=list)
 
 
 class ChatService:
@@ -106,7 +121,7 @@ class ChatService:
         processed_data: Dict[str, Any],
         guild_name: str,
         location_name: str,
-    ) -> Optional[str]:
+    ) -> Optional[ChatResult]:
         """
         处理聊天消息，生成并返回AI的最终回复。
 
@@ -115,7 +130,7 @@ class ChatService:
             processed_data (Dict[str, Any]): 由 MessageProcessor 处理后的数据。
 
         Returns:
-            str: AI生成的最终回复文本。如果为 None，则表示不应回复。
+            ChatResult: AI生成的回复结果（含工具调用元数据）。如果为 None，则表示不应回复。
         """
         author = message.author
         guild_id = message.guild.id if message.guild else 0
@@ -301,8 +316,15 @@ class ChatService:
                 user_id_for_settings, provider_type=provider_name
             )
 
-            # 定义工具执行器
+            # 定义工具执行器（使用闭包追踪本次请求中调用的工具）
+            _called_tools: List[str] = []
+
             async def tool_executor(call, **kwargs):
+                # 记录被调用的工具名称（兼容 dict 和 FunctionCall 对象）
+                if isinstance(call, dict):
+                    _called_tools.append(call.get("name", ""))
+                else:
+                    _called_tools.append(getattr(call, "name", ""))
                 return await ai_service.tool_service.execute_tool_call(
                     call,
                     channel=message.channel,
@@ -357,14 +379,6 @@ class ChatService:
 
             ai_response = result.content
 
-            # 记录最后调用的工具
-            if result.tool_calls:
-                ai_service.last_called_tools = [
-                    tc.get("name", "") for tc in result.tool_calls
-                ]
-            else:
-                ai_service.last_called_tools = []
-
             if not ai_response:
                 log.info(f"AI服务未返回回复（可能由于冷却），跳过用户 {author.id}。")
                 return None
@@ -389,25 +403,20 @@ class ChatService:
             # 5. --- 后处理与格式化 ---
             final_response = self._format_ai_response(ai_response)
 
-            # --- 新增：为特定工具调用添加后缀 ---
-            if (
-                ai_service.last_called_tools
-                and "query_tutorial_knowledge_base" in ai_service.last_called_tools
-            ):
+            # --- 为特定工具调用添加后缀 ---
+            if "query_tutorial_knowledge_base" in _called_tools:
                 final_response += chat_config.TUTORIAL_SEARCH_SUFFIX
-                # 清空列表，避免影响下一次对话
-                ai_service.last_called_tools = []
 
             # 6. --- 异步执行后续任务（不阻塞回复） ---
             # 此处现在只应包含不影响核心回复流程的日志记录等任务
             # self._log_rag_summary(author, final_content, world_book_entries, final_response)
 
             log.info(f"已为用户 {author.display_name} 生成AI回复: {final_response}")
-            return final_response
+            return ChatResult(content=final_response, tools_called=_called_tools)
 
         except Exception as e:
             log.error(f"[ChatService] 处理聊天消息时出错: {e}", exc_info=True)
-            return "抱歉，处理你的消息时出现了问题，请稍后再试。"
+            return ChatResult(content="抱歉，处理你的消息时出现了问题，请稍后再试。")
 
     def _format_ai_response(self, ai_response: str) -> str:
         """清理和格式化AI的原始回复。"""
