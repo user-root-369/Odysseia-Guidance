@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import discord
-from discord.ui import View, Button
+from discord.ui import View, Button, Select
 from discord import SelectOption, Interaction, CategoryChannel
 from typing import List, Optional
 
@@ -13,11 +13,13 @@ from src.chat.features.chat_settings.ui.channel_settings_modal import ChatSettin
 
 
 class CooldownSettingsView(View):
-    """一个用于管理频道和分类冷却设置的UI视图。"""
+    """一个用于管理频道和分类冷却设置的UI视图，支持跨服务器操作。"""
 
     def __init__(self, interaction: Interaction, parent_view_message: discord.Message):
         super().__init__(timeout=300)
-        self.guild = interaction.guild
+        self.bot: discord.Client = interaction.client
+        self.original_guild: Optional[discord.Guild] = interaction.guild
+        self.selected_guild: Optional[discord.Guild] = interaction.guild
         self.service = chat_settings_service
         self.parent_view_message = parent_view_message
         self.settings: dict = {}
@@ -26,9 +28,9 @@ class CooldownSettingsView(View):
 
     async def _initialize(self):
         """异步获取设置并构建UI。"""
-        if not self.guild:
+        if not self.selected_guild:
             return
-        self.settings = await self.service.get_guild_settings(self.guild.id)
+        self.settings = await self.service.get_guild_settings(self.selected_guild.id)
         self._create_paginators()
         self._create_view_items()
 
@@ -41,13 +43,30 @@ class CooldownSettingsView(View):
         await view._initialize()
         return view
 
+    def _get_guild_options(self) -> List[SelectOption]:
+        """获取所有可用服务器的下拉选项。"""
+        options = []
+        for guild in sorted(self.bot.guilds, key=lambda g: g.name):
+            is_current = (
+                self.selected_guild is not None and guild.id == self.selected_guild.id
+            )
+            options.append(
+                SelectOption(
+                    label=guild.name,
+                    value=str(guild.id),
+                    description=f"ID: {guild.id}",
+                    default=is_current,
+                )
+            )
+        return options
+
     def _create_paginators(self):
         """创建分页器实例。"""
-        if not self.guild:
+        if not self.selected_guild:
             return
         category_options = [
             SelectOption(label=c.name, value=str(c.id))
-            for c in sorted(self.guild.categories, key=lambda c: c.position)
+            for c in sorted(self.selected_guild.categories, key=lambda c: c.position)
         ]
         self.category_paginator = PaginatedSelect(
             placeholder="选择一个分类进行设置...",
@@ -59,7 +78,7 @@ class CooldownSettingsView(View):
 
         channel_options = [
             SelectOption(label=c.name, value=str(c.id))
-            for c in sorted(self.guild.text_channels, key=lambda c: c.position)
+            for c in sorted(self.selected_guild.text_channels, key=lambda c: c.position)
         ]
         self.channel_paginator = PaginatedSelect(
             placeholder="选择一个频道进行设置...",
@@ -73,43 +92,82 @@ class CooldownSettingsView(View):
         """根据当前设置创建并添加所有UI组件。"""
         self.clear_items()
 
+        selected_guild_name = (
+            self.selected_guild.name if self.selected_guild else "未知"
+        )
+
         # 标题说明
         embed = discord.Embed(
             title="⏱️ 冷却设置",
-            description="在此管理服务器内分类和频道的聊天冷却设置。",
+            description=f"当前服务器: **{selected_guild_name}**\n在此管理服务器内分类和频道的聊天冷却设置。",
             color=discord.Color.blue(),
         )
         embed.add_field(
             name="💡 提示",
-            value="点击下方的分类或频道下拉菜单，选择要设置的项目。\n支持固定冷却和频率限制两种模式。",
+            value="先选择服务器，再点击下方的分类或频道下拉菜单进行设置。\n支持固定冷却和频率限制两种模式。",
             inline=False,
         )
 
-        # 分类选择器 (第 0 行)
-        if self.category_paginator:
-            self.add_item(self.category_paginator.create_select(row=0))
-            # 添加分类翻页按钮 (第 1 行)
-            for btn in self.category_paginator.get_buttons(row=1):
-                self.add_item(btn)
+        # 第 0 行：服务器选择器
+        guild_options = self._get_guild_options()
+        if guild_options:
+            guild_select = Select(
+                placeholder="选择要管理的服务器...",
+                options=guild_options[:25],  # Select 最多25个选项
+                custom_id="guild_select",
+                row=0,
+            )
+            guild_select.callback = self.on_guild_select
+            self.add_item(guild_select)
 
-        # 频道选择器 (第 2 行)
+        # 第 1 行：分类选择器
+        if self.category_paginator:
+            self.add_item(self.category_paginator.create_select(row=1))
+
+        # 第 2 行：频道选择器
         if self.channel_paginator:
             self.add_item(self.channel_paginator.create_select(row=2))
-            # 添加频道翻页按钮 (第 3 行)
-            for btn in self.channel_paginator.get_buttons(row=3):
-                self.add_item(btn)
 
-        # 返回按钮 (第 4 行)
+        # 第 3 行：所有翻页按钮 + 返回按钮
+        all_buttons = []
+        if self.category_paginator:
+            all_buttons.extend(self.category_paginator.get_buttons(row=3))
+        if self.channel_paginator:
+            all_buttons.extend(self.channel_paginator.get_buttons(row=3))
+
+        # 返回按钮也放在第 3 行
         back_button = Button(
             label="返回主菜单",
             style=discord.ButtonStyle.gray,
             custom_id="back_to_main",
-            row=4,
+            row=3,
         )
         back_button.callback = self.on_back
-        self.add_item(back_button)
+        all_buttons.append(back_button)
+
+        # Discord 每行最多5个按钮
+        for btn in all_buttons[:5]:
+            self.add_item(btn)
 
         return embed
+
+    async def on_guild_select(self, interaction: Interaction):
+        """处理服务器选择事件。"""
+        if not interaction.data or "values" not in interaction.data:
+            await interaction.response.defer()
+            return
+
+        selected_guild_id = int(interaction.data["values"][0])
+        guild = self.bot.get_guild(selected_guild_id)
+        if not guild:
+            await interaction.response.send_message(
+                "❌ 找不到该服务器，bot 可能已不在该服务器中。",
+                ephemeral=True,
+            )
+            return
+
+        self.selected_guild = guild
+        await self._update_view(interaction)
 
     async def _update_view(self, interaction: Interaction):
         """通过编辑附加的消息来刷新视图。"""
@@ -151,11 +209,11 @@ class CooldownSettingsView(View):
             return
 
         entity_id = int(values[0])
-        if not self.guild:
+        if not self.selected_guild:
             await interaction.response.defer()
             return
 
-        entity = self.guild.get_channel(entity_id)
+        entity = self.selected_guild.get_channel(entity_id)
         if not entity:
             await interaction.response.send_message("找不到该项目。", ephemeral=True)
             return
@@ -189,11 +247,11 @@ class CooldownSettingsView(View):
     ):
         """处理模态窗口提交的数据并保存。"""
         try:
-            if not self.guild:
+            if not self.selected_guild:
                 await interaction.followup.send("❌ 服务器信息丢失。", ephemeral=True)
                 return
             await self.service.set_entity_settings(
-                guild_id=self.guild.id,
+                guild_id=self.selected_guild.id,
                 entity_id=entity_id,
                 entity_type=entity_type,
                 is_chat_enabled=settings.get("is_chat_enabled"),
@@ -202,11 +260,8 @@ class CooldownSettingsView(View):
                 cooldown_limit=settings.get("cooldown_limit"),
             )
 
-            if not self.guild:
-                entity_name = f"ID: {entity_id}"
-            else:
-                entity = self.guild.get_channel(entity_id)
-                entity_name = entity.name if entity else f"ID: {entity_id}"
+            entity = self.selected_guild.get_channel(entity_id)
+            entity_name = entity.name if entity else f"ID: {entity_id}"
 
             is_chat_enabled = settings.get("is_chat_enabled")
             enabled_str = "继承"
