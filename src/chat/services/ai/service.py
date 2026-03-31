@@ -9,6 +9,7 @@ AI Service 统一入口
 - Token 统计
 """
 
+import asyncio
 import json
 import os
 import logging
@@ -29,6 +30,7 @@ from .providers import (
 )
 from .config.providers import get_provider_configs, ProviderConfig
 from .config.models import get_fallback_providers, get_model_config
+from src.chat.config.chat_config import PROVIDER_RETRY_CONFIG
 
 log = logging.getLogger(__name__)
 
@@ -332,11 +334,13 @@ class AIService:
         self._log_full_context_if_enabled(messages, tools, model_name)
 
         try:
-            return await provider.generate(
+            return await self._retry_generate(
+                provider=provider,
                 messages=messages,
                 config=config,
                 tools=tools,
-                model=actual_model,  # 使用实际模型名称
+                model=actual_model,
+                provider_name=provider_name,
                 **kwargs,
             )
         except GenerationError as e:
@@ -428,13 +432,15 @@ class AIService:
         self._log_full_context_if_enabled(messages, tools, model_name)
 
         try:
-            return await provider.generate_with_tools(
+            return await self._retry_generate_with_tools(
+                provider=provider,
                 messages=messages,
                 config=config,
                 tools=tools,
+                model=actual_model,
+                provider_name=provider_name,
                 tool_executor=tool_executor,
                 max_iterations=max_iterations,
-                model=actual_model,  # 使用实际模型名称
                 **kwargs,
             )
         except GenerationError as e:
@@ -471,6 +477,144 @@ class AIService:
                 provider_type=provider_name,
                 original_error=e,
             )
+
+    async def _retry_generate(
+        self,
+        provider: BaseProvider,
+        messages: List[Dict[str, Any]],
+        config: GenerationConfig,
+        tools: Optional[List[Any]],
+        model: str,
+        provider_name: str,
+        **kwargs,
+    ) -> GenerationResult:
+        """
+        带重试逻辑的生成方法
+
+        在故障转移前，先对同一 Provider 重试指定次数。
+
+        Args:
+            provider: Provider 实例
+            messages: 对话消息列表
+            config: 生成配置
+            tools: 工具列表
+            model: 实际模型名称
+            provider_name: Provider 名称（用于日志）
+            **kwargs: 其他参数
+
+        Returns:
+            GenerationResult: 生成结果
+
+        Raises:
+            GenerationError: 所有重试均失败时抛出
+            Exception: 其他未预期的异常
+        """
+        max_retries = PROVIDER_RETRY_CONFIG["MAX_RETRIES"]
+        retry_delay = PROVIDER_RETRY_CONFIG["RETRY_DELAY_SECONDS"]
+        last_error: Optional[Exception] = None
+
+        for attempt in range(max_retries + 1):
+            try:
+                return await provider.generate(
+                    messages=messages,
+                    config=config,
+                    tools=tools,
+                    model=model,
+                    **kwargs,
+                )
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries:
+                    log.warning(
+                        f"Provider '{provider_name}' 第 {attempt + 1}/{max_retries + 1} 次请求失败: {e}，"
+                        f"将在 {retry_delay}s 后重试..."
+                    )
+                    await asyncio.sleep(retry_delay)
+                else:
+                    log.warning(
+                        f"Provider '{provider_name}' 经过 {max_retries + 1} 次尝试后仍然失败，准备故障转移"
+                    )
+
+        # 所有重试均失败，抛出最后一个错误
+        if isinstance(last_error, GenerationError):
+            raise last_error
+        raise GenerationError(
+            f"重试 {max_retries} 次后仍然失败: {last_error}",
+            provider_type=provider_name,
+            original_error=last_error,
+        )
+
+    async def _retry_generate_with_tools(
+        self,
+        provider: BaseProvider,
+        messages: List[Dict[str, Any]],
+        config: GenerationConfig,
+        tools: Optional[List[Any]],
+        model: str,
+        provider_name: str,
+        tool_executor: Optional[Any] = None,
+        max_iterations: int = 5,
+        **kwargs,
+    ) -> GenerationResult:
+        """
+        带重试逻辑的工具调用生成方法
+
+        在故障转移前，先对同一 Provider 重试指定次数。
+
+        Args:
+            provider: Provider 实例
+            messages: 对话消息列表
+            config: 生成配置
+            tools: 工具列表
+            model: 实际模型名称
+            provider_name: Provider 名称（用于日志）
+            tool_executor: 工具执行函数
+            max_iterations: 最大迭代次数
+            **kwargs: 其他参数
+
+        Returns:
+            GenerationResult: 生成结果
+
+        Raises:
+            GenerationError: 所有重试均失败时抛出
+            Exception: 其他未预期的异常
+        """
+        max_retries = PROVIDER_RETRY_CONFIG["MAX_RETRIES"]
+        retry_delay = PROVIDER_RETRY_CONFIG["RETRY_DELAY_SECONDS"]
+        last_error: Optional[Exception] = None
+
+        for attempt in range(max_retries + 1):
+            try:
+                return await provider.generate_with_tools(
+                    messages=messages,
+                    config=config,
+                    tools=tools,
+                    tool_executor=tool_executor,
+                    max_iterations=max_iterations,
+                    model=model,
+                    **kwargs,
+                )
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries:
+                    log.warning(
+                        f"Provider '{provider_name}' 第 {attempt + 1}/{max_retries + 1} 次工具调用请求失败: {e}，"
+                        f"将在 {retry_delay}s 后重试..."
+                    )
+                    await asyncio.sleep(retry_delay)
+                else:
+                    log.warning(
+                        f"Provider '{provider_name}' 经过 {max_retries + 1} 次尝试后仍然失败，准备故障转移"
+                    )
+
+        # 所有重试均失败，抛出最后一个错误
+        if isinstance(last_error, GenerationError):
+            raise last_error
+        raise GenerationError(
+            f"重试 {max_retries} 次后仍然失败: {last_error}",
+            provider_type=provider_name,
+            original_error=last_error,
+        )
 
     async def _fallback_generate(
         self,

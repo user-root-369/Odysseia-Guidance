@@ -264,6 +264,13 @@ API_RETRY_CONFIG = {
     "EMPTY_RESPONSE_MAX_ATTEMPTS": 2,  # 当API返回空回复（可能因安全设置）时，使用同一个密钥进行重试的最大次数
 }
 
+# --- Provider 故障转移重试配置 ---
+# 当 Provider 请求失败时，在执行故障转移之前先重试的配置
+PROVIDER_RETRY_CONFIG = {
+    "MAX_RETRIES": 10,  # 故障转移前对同一 Provider 的最大重试次数（不含首次请求）
+    "RETRY_DELAY_SECONDS": 1,  # 每次重试之间的延迟（秒）
+}
+
 # 定义不同安全风险等级对应的信誉惩罚值
 SAFETY_PENALTY_MAP = {
     "NEGLIGIBLE": 0,  # 可忽略
