@@ -108,6 +108,11 @@ class ChatService:
             )
             return False
 
+        # 冷却检查通过后立即更新冷却时间戳，防止用户在AI处理期间重复调用
+        await chat_settings_service.update_user_cooldown(
+            author.id, message.channel.id, effective_config
+        )
+
         # 4. 黑名单检查
         if await chat_db_manager.is_user_blacklisted(author.id, guild_id):
             log.info(f"用户 {author.id} 在服务器 {guild_id} 被拉黑，跳过前置检查。")
@@ -394,11 +399,6 @@ class ChatService:
                     ai_response=ai_response,
                     current_model=current_model,
                 )
-
-            # 更新新系统的CD
-            await chat_settings_service.update_user_cooldown(
-                author.id, message.channel.id, effective_config
-            )
 
             # 5. --- 后处理与格式化 ---
             final_response = self._format_ai_response(ai_response)
