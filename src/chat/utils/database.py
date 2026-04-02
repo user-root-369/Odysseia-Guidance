@@ -1244,6 +1244,30 @@ class ChatDatabaseManager:
             fetch="all",
         )
 
+    async def cleanup_old_timestamps(self, max_age_hours: int = 24) -> int:
+        """
+        清理过期的频率限制时间戳记录。
+
+        删除超过 max_age_hours 小时的旧记录，防止 user_channel_timestamps 表无限增长。
+        24小时的默认值足以覆盖任何合理的 cooldown_duration 配置。
+
+        Returns:
+            int: 被删除的记录数
+        """
+        query = """
+            DELETE FROM user_channel_timestamps
+            WHERE timestamp < datetime('now', ?)
+        """
+        time_modifier = f"-{max_age_hours} hours"
+        deleted_count = await self._execute(
+            self._db_transaction,
+            query,
+            (time_modifier,),
+            fetch="rowcount",
+            commit=True,
+        )
+        return deleted_count or 0
+
     async def update_user_thread_cooldown_settings(
         self, user_id: int, settings: Dict[str, Any]
     ) -> None:
