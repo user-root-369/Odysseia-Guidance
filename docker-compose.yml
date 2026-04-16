@@ -14,13 +14,13 @@ services:
     # --- 部署方式二选一 ---
     # 方式一 (推荐): 从本地源代码构建
     # 优点: 使用最新代码、方便调试
-    # build:
-    #   context: .
-    #   dockerfile: .devcontainer/Dockerfile
-
+    build:
+      context: .
+      dockerfile: .devcontainer/Dockerfile
+ 
     # 方式二: 直接使用 Docker Hub 上的公共镜像
     # 优点: 快速、简单、无需本地构建。使用此方式时，请注释掉上面的 'build' 部分，并取消下方 'image' 行的注释。
-    image: echoni0n/braingirl:latest
+    # image: echoni0n/braingirl:latest
 
     container_name: Odysseia_Guidance
     volumes:
@@ -67,20 +67,21 @@ services:
       - db
 
   # Caddy 反向代理 - 提供 HTTPS
-  caddy:
-    image: caddy:latest
-    container_name: caddy_proxy
-    restart: unless-stopped
-    ports:
-      - "80:80" # HTTP (用于证书验证)
-      - "443:443" # HTTPS
-    volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data # 证书数据持久化
-    networks:
-      - bot_network
-    depends_on:
-      - blackjack_web
+  # 暂时停用，如需恢复请取消注释以下服务配置
+  # caddy:
+  #   image: caddy:latest
+  #   container_name: caddy_proxy
+  #   restart: unless-stopped
+  #   ports:
+  #     - "80:80" # HTTP (用于证书验证)
+  #     - "443:443" # HTTPS
+  #   volumes:
+  #     - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+  #     - caddy_data:/data # 证书数据持久化
+  #   networks:
+  #     - bot_network
+  #   depends_on:
+  #     - blackjack_web
 
   #  config_web:
   #    build:

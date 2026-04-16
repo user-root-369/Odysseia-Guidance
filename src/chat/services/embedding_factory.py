@@ -58,18 +58,36 @@ class NoneEmbeddingService:
 
 
 class ApiEmbeddingService:
-    """API 向量模式的服务，使用 AIService Embedding API"""
+    """API 向量模式的服务，通过 OpenAI 兼容接口调用 Embedding API"""
 
     def __init__(self):
-        self._ai_service = None
+        self._client = None
+        self._model = None
+        self._base_url = None
+        self._api_key = None
 
-    def _get_ai_service(self):
-        """延迟导入 AIService 以避免循环导入"""
-        if self._ai_service is None:
-            from src.chat.services.ai.service import ai_service
+    def _get_client(self):
+        """延迟初始化 AsyncOpenAI 客户端"""
+        if self._client is None:
+            import os
+            from openai import AsyncOpenAI
 
-            self._ai_service = ai_service
-        return self._ai_service
+            self._base_url = os.getenv("OPENAI_API_BASE_URL", "").rstrip("/")
+            self._api_key = os.getenv("OPENAI_API_KEY", "")
+            self._model = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+
+            if not self._base_url or not self._api_key:
+                log.warning(
+                    "[ApiEmbeddingService] OPENAI_API_BASE_URL 或 OPENAI_API_KEY 未配置，"
+                    "embedding 将返回 None。"
+                )
+                return None
+
+            self._client = AsyncOpenAI(
+                api_key=self._api_key,
+                base_url=self._base_url,
+            )
+        return self._client
 
     async def generate_embedding(
         self,
@@ -77,15 +95,25 @@ class ApiEmbeddingService:
         task_type: str = "retrieval_document",
         title: Optional[str] = None,
     ) -> Optional[List[float]]:
-        """使用 AIService 生成 embedding"""
-        service = self._get_ai_service()
-        return await service.generate_embedding(text)
+        """使用 OpenAI 兼容接口生成 embedding"""
+        client = self._get_client()
+        if client is None:
+            return None
+        try:
+            response = await client.embeddings.create(
+                input=text,
+                model=self._model,
+            )
+            return response.data[0].embedding
+        except Exception as e:
+            log.error(f"[ApiEmbeddingService] 生成 embedding 失败: {e}")
+            return None
 
     async def check_connection(self) -> bool:
-        """检查 AIService 是否可用"""
+        """检查 embedding 服务是否可用"""
         try:
-            service = self._get_ai_service()
-            return service.is_available()
+            result = await self.generate_embedding("test")
+            return result is not None
         except Exception:
             return False
 
@@ -207,17 +235,14 @@ def get_embedding_column_for_mode(mode: Optional[VectorMode] = None) -> str:
         mode: 向量模式，如果为 None 则使用全局配置 VECTOR_MODE
 
     Returns:
-        embedding 列名，如果模式为 "none" 或 "api" 则返回空字符串
+        embedding 列名；仅在 none 模式下返回空字符串
     """
     use_mode = mode or VECTOR_MODE
 
     if use_mode == "none":
         return ""
-    elif use_mode == "api":
-        # API 模式暂不支持数据库存储，返回空
-        return ""
-    elif use_mode == "local":
-        # 本地模式默认使用 qwen_embedding
+    elif use_mode in ("api", "local"):
+        # API 与本地模式都依赖数据库中的向量列进行检索
         return "qwen_embedding"
     return "qwen_embedding"
 
@@ -227,12 +252,12 @@ async def get_embedding_column() -> str:
     异步获取当前使用的 embedding 列名
 
     根据数据库配置返回当前使用的 embedding 列名。
-    仅在本地向量模式下有效。
+    只要启用了向量功能（api / local），都返回数据库中的目标列名。
 
     Returns:
         embedding 列名
     """
-    if VECTOR_MODE != "local":
+    if VECTOR_MODE == "none":
         return ""
 
     try:

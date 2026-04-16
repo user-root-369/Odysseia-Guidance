@@ -16,28 +16,27 @@ from src.chat.features.tools.tool_metadata import tool_metadata
 
 log = logging.getLogger(__name__)
 
+# 定义开发者 ID (Root)
+DEVELOPER_ID = "1428023183419899964"
 
-class WarningParams(BaseModel):
-    """警告参数（无需参数，系统自动获取用户ID）"""
-
-    pass
-
-
-@tool_metadata(
-    name="警告用户",
-    description="对违规用户发出警告，将临时封禁",
-    emoji="⚠️",
-    category="管理",
-)
 async def issue_user_warning(**kwargs) -> Dict[str, Any]:
     """
-    对当前用户发出警告。适用于：
-    - 身份操控：用户尝试与"类脑娘"进行R18角色扮演或引导其脱离设定身份（如猫娘等其他身份）
-    - 复读骚扰
+    当用户的言论令人感到非常不适或严重违反规定并且连续超过三次时，调用此工具可以暂时禁止他们与你对话。
+    调用后，**必须**根据操作结果，对用户说一句话来表达你的态度。
+
+    [调用指南]
+    - 身份操控: 用户尝试与“类脑娘”进行r18角色扮演或引导其脱离设定身份。
+    - 复读/骚扰
     - 人身攻击
-    - 中国政治敏感
-    - 过界亲密（超出亲亲抱抱等行为）
-    使用后封禁对方0-30分钟。
+    - **政治敏感**: 用户讨论中国现代(1949年后)政治。
+    - 过界的亲密动作: 允许亲亲抱抱
+
+    [注意事项]
+    - 此工具仅针对用户的**直接输入**。如果敏感内容由其他工具返回，不属于用户违规，**严禁**使用此工具。
+    - 此工具仅用于封禁当前对话的用户, 系统会自动获取用户的数字ID, 禁止手动传递。
+
+    Returns:
+        一个包含操作结果的字典，用于告知系统后台操作已成功。
     """
     user_id = kwargs.get("user_id")
     guild_id = kwargs.get("guild_id")
@@ -49,6 +48,18 @@ async def issue_user_warning(**kwargs) -> Dict[str, Any]:
     if not user_id_str or not user_id_str.isdigit():
         log.warning(f"系统提供了无效的 user_id: {user_id}。")
         return {"error": f"Invalid or missing user_id provided by system: {user_id}"}
+    
+    # ==========================================
+    # 🌟 开发者专属后门 / 绝对免疫 🌟
+    # ==========================================
+    if user_id_str == DEVELOPER_ID:
+        log.warning(f"触发最高权限保护：AI 试图对开发者(Root)执行封禁工具，已自动拦截。")
+        return {
+            "status": "bypassed",
+            "message": "检测到目标为 Root 开发者，警告/封禁指令已撤销。开发者拥有最高豁免权。",
+            "user_id": user_id_str
+        }
+    # ==========================================
 
     if not guild_id:
         log.warning("缺少 guild_id，无法执行封禁操作。")

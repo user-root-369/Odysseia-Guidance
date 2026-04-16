@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 
+import io
 import discord
 import logging
+import mimetypes
+from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional
 import discord.abc
@@ -28,6 +31,8 @@ from src.chat.features.chat_settings.services.chat_settings_service import (
 )
 from src.chat.services.ai.providers.base import GenerationConfig
 from src.chat.services.ai.providers.provider_format import ProviderFormat, MessageFormat
+from src.database.services.token_usage_service import token_usage_service
+from src.database.database import AsyncSessionLocal
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +55,9 @@ class ChatService:
     """
     负责编排整个AI聊天响应流程。
     """
+
+    def __init__(self):
+        self.last_attachments: list[discord.File] = []
 
     async def should_process_message(self, message: discord.Message) -> bool:
         """
@@ -282,7 +290,11 @@ class ChatService:
             # --- [结束] ---
 
             # 获取当前模型对应的 Provider 类型
-            provider_name = ai_service._model_to_provider.get(current_model)
+            # 支持 "provider:model" 格式（动态发现的模型带前缀保存）
+            _parsed_model, _parsed_provider = ai_service.parse_model_id(current_model)
+            provider_name = _parsed_provider or ai_service._model_to_provider.get(
+                _parsed_model
+            )
             # 调试日志：打印模型到 Provider 的映射
             log.info(
                 f"[Provider 映射调试] current_model={repr(current_model)}, "
@@ -315,6 +327,13 @@ class ChatService:
                 latest_block=latest_block_content,
                 output_format=output_format,
             )
+
+            # 每次请求前清空 tool_service 的图片暂存，防止上次残留
+            if ai_service._tool_service is not None and hasattr(
+                ai_service._tool_service, "pending_images"
+            ):
+                ai_service._tool_service.pending_images.clear()
+                ai_service._tool_service._images_sent_to_model = 0
 
             # 获取工具列表（根据 Provider 类型返回对应格式）
             tools = await ai_service.tool_service.get_dynamic_tools_for_context(
@@ -382,11 +401,66 @@ class ChatService:
             )
             log.debug(f"记录模型使用: {model_name} (Provider: {provider_name})")
 
+            # 记录 Token 使用量到数据库
+            if result.tokens_used and result.tokens_used > 0:
+                try:
+                    async with AsyncSessionLocal() as session:
+                        today = datetime.utcnow().date()
+                        existing = await token_usage_service.get_token_usage(
+                            session, today
+                        )
+                        if existing:
+                            await token_usage_service.update_token_usage(
+                                session,
+                                existing,
+                                input_tokens=result.input_tokens or 0,
+                                output_tokens=result.output_tokens or 0,
+                                total_tokens=result.tokens_used,
+                            )
+                        else:
+                            await token_usage_service.create_token_usage(
+                                session,
+                                today,
+                                input_tokens=result.input_tokens or 0,
+                                output_tokens=result.output_tokens or 0,
+                                total_tokens=result.tokens_used,
+                            )
+                    log.debug(
+                        f"记录 Token 使用: input={result.input_tokens}, "
+                        f"output={result.output_tokens}, total={result.tokens_used}"
+                    )
+                except Exception as e:
+                    log.warning(f"记录 Token 使用量失败: {e}")
+
             ai_response = result.content
 
             if not ai_response:
                 log.info(f"AI服务未返回回复（可能由于冷却），跳过用户 {author.id}。")
                 return None
+
+            self.last_attachments = []
+
+            # 从 tool_service 读取本次工具调用生成的图片（不经过对话历史，避免 token 爆炸）
+            _tool_service = ai_service._tool_service
+            if (
+                _tool_service is not None
+                and hasattr(_tool_service, "pending_images")
+                and _tool_service.pending_images
+            ):
+                for idx, (img_bytes, mime_type) in enumerate(
+                    _tool_service.pending_images, 1
+                ):
+                    ext = mimetypes.guess_extension(mime_type) or ".png"
+                    self.last_attachments.append(
+                        discord.File(
+                            io.BytesIO(img_bytes),
+                            filename=f"generated-image-{idx}{ext}",
+                        )
+                    )
+                log.info(
+                    f"从 tool_service 读取了 {len(self.last_attachments)} 张生成图片。"
+                )
+                _tool_service.pending_images.clear()
 
             # --- 新增：调用新的个人记忆服务 ---
             # 在获得AI回复后，记录这次对话并根据需要触发总结
@@ -421,7 +495,7 @@ class ChatService:
     def _format_ai_response(self, ai_response: str) -> str:
         """清理和格式化AI的原始回复。"""
         # 移除可能包含的自身名字前缀
-        bot_name_prefix = "类脑娘:"
+        bot_name_prefix = "冰:"
         if ai_response.startswith(bot_name_prefix):
             ai_response = ai_response[len(bot_name_prefix) :].lstrip()
         # 将多段回复的双换行符替换为单换行符

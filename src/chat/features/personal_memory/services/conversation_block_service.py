@@ -139,7 +139,7 @@ class ConversationBlockService:
             if role == "user":
                 lines.append(f"用户: {text}")
             else:
-                lines.append(f"类脑娘: {text}")
+                lines.append(f"冰: {text}")
 
         return "\n".join(lines)
 

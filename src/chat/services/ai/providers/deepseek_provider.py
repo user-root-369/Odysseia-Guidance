@@ -203,6 +203,9 @@ class DeepSeekProvider(BaseProvider):
         conversation_history = messages.copy()
         # 收集所有工具调用，用于最终返回
         all_tool_calls = []
+        # 累计多轮工具调用的 token 使用量
+        total_input_tokens = 0
+        total_output_tokens = 0
 
         try:
             for iteration in range(max_iterations):
@@ -218,16 +221,27 @@ class DeepSeekProvider(BaseProvider):
                     model=model_name,
                 )
 
+                # 累计本轮的 token 使用量
+                total_input_tokens += result.input_tokens or 0
+                total_output_tokens += result.output_tokens or 0
+
                 # 检查是否有工具调用
                 if not result.has_tool_calls or not result.tool_calls:
-                    # 最终返回时，附加所有收集的工具调用信息
+                    # 最终返回时，附加所有收集的工具调用信息和累计 token
                     if all_tool_calls:
                         return GenerationResult(
                             content=result.content,
                             model_used=result.model_used,
+                            tokens_used=total_input_tokens + total_output_tokens,
+                            input_tokens=total_input_tokens,
+                            output_tokens=total_output_tokens,
                             finish_reason=result.finish_reason,
                             tool_calls=all_tool_calls,
                         )
+                    # 即使没有多轮工具调用，也用累计值
+                    result.input_tokens = total_input_tokens
+                    result.output_tokens = total_output_tokens
+                    result.tokens_used = total_input_tokens + total_output_tokens
                     return result
 
                 # 执行工具调用

@@ -441,6 +441,7 @@ class AIService:
                 provider_name=provider_name,
                 tool_executor=tool_executor,
                 max_iterations=max_iterations,
+                tool_service=self._tool_service,
                 **kwargs,
             )
         except GenerationError as e:

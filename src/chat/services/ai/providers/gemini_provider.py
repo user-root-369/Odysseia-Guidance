@@ -370,6 +370,9 @@ class GeminiProvider(BaseProvider):
 
             # 工具调用循环
             thinking_content = None
+            # 累计多轮工具调用的 token 使用量
+            total_input_tokens = 0
+            total_output_tokens = 0
 
             for iteration in range(max_iterations):
                 log.info(f"工具调用循环: 第 {iteration + 1}/{max_iterations} 次")
@@ -380,6 +383,11 @@ class GeminiProvider(BaseProvider):
                     contents=conversation_history,
                     config=gen_config,
                 )
+
+                # 累计本轮的 token 使用量
+                if response.usage_metadata:
+                    total_input_tokens += response.usage_metadata.prompt_token_count or 0
+                    total_output_tokens += response.usage_metadata.candidates_token_count or 0
 
                 # 检查思考链
                 if response.candidates and response.candidates[0].content.parts:
@@ -405,6 +413,11 @@ class GeminiProvider(BaseProvider):
                 if not function_calls:
                     # 没有工具调用，返回最终结果
                     result = self._process_response(response, model_name)
+                    # 用累计的 token 使用量覆盖（多轮工具调用时更准确）
+                    if total_input_tokens > 0 or total_output_tokens > 0:
+                        result.input_tokens = total_input_tokens
+                        result.output_tokens = total_output_tokens
+                        result.tokens_used = total_input_tokens + total_output_tokens
                     if thinking_content:
                         result.thinking_content = thinking_content
                     await self.release_client(api_key, success=True)
@@ -440,6 +453,31 @@ class GeminiProvider(BaseProvider):
                             )
 
                     # 将工具结果添加到对话历史
+                    # 如果 tool_service 有本轮新增的图片，追加到同一 Content 中
+                    # 让模型在下一轮能"看到"图片（视觉 token ~300-500/张，不触发超限）
+                    # 用 _images_sent_to_model 标记已追加过的索引，防止多轮工具调用重复追加
+                    tool_service = kwargs.get("tool_service")
+                    if tool_service is not None:
+                        pending = getattr(tool_service, "pending_images", [])
+                        already_sent = getattr(tool_service, "_images_sent_to_model", 0)
+                        new_images = pending[already_sent:]
+                        if new_images:
+                            for img_bytes, mime_type in new_images:
+                                tool_results.append(
+                                    genai_types.Part(
+                                        inline_data=genai_types.Blob(
+                                            mime_type=mime_type,
+                                            data=img_bytes,
+                                        )
+                                    )
+                                )
+                                log.info(
+                                    f"已将生成图片附加至工具结果 Content 供模型查看 "
+                                    f"({len(img_bytes)} bytes, {mime_type})"
+                                )
+                            # 更新已追加计数，下一轮不重复追加
+                            tool_service._images_sent_to_model = len(pending)
+
                     conversation_history.append(
                         genai_types.Content(parts=tool_results, role="user")
                     )
@@ -858,3 +896,13 @@ class GeminiCustomProvider(GeminiProvider):
 
         if models:
             self.supported_models = models
+
+    async def generate_embedding(
+        self, text: str, model: str = "text-embedding-004", **kwargs
+    ) -> Optional[List[float]]:
+        """
+        自定义端点不支持 embedding API，直接返回 None。
+        embedding 请求应由官方 gemini_official provider 或 OpenAI 兼容 provider 处理。
+        """
+        log.debug(f"[{self.provider_name}] 自定义端点不支持 embedding，跳过。")
+        return None

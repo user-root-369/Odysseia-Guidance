@@ -46,8 +46,21 @@ async def get_user_profile(
     **kwargs,
 ) -> Dict[str, Any]:
     """
-    查询用户的个人资料。按需在 queries 中指定要查询的字段。
+    查询用户的个人资料，可选择性地包括多个字段。
+    [调用指南]
+    - **自主决策**: 只要认为有必要就可以调用
+    - **按需查询**: 根据上下文，在 `queries` 列表中指定一个或多个需要查询的字段，以获取必要的信息。
+    - **查询当前对话用户**: 如果你要查询当前对话用户信息,系统会自动提供用户的数字ID，无需填写 `user_id`,调用工具即可。
+
+    Args:
+        user_id (str): 目标用户的 Discord 数字ID。**注意**: 如果是查询当前对话用户, 此参数将由系统自动填充, 模型无需处理。
+        queries (List[str]): 需要查询的字段列表。有效值: "balance", "avatar", "roles"。
+
+    Returns:
+        一个包含查询结果和状态的字典。返回值中的 `user_id` 字段即为本次查询的目标用户 Discord ID，
+        若未主动指定 `user_id`，则该值为当前对话用户的 ID。
     """
+    # 从 kwargs 安全地获取由系统注入的 bot 和 guild 实例
     bot = kwargs.get("bot")
     guild = kwargs.get("guild")
 
@@ -83,11 +96,29 @@ async def get_user_profile(
         "errors": [],
     }
 
+    # 首先获取用户基本信息（用户名），让 AI 知道查询的是哪个用户
+    try:
+        user = await bot.fetch_user(target_id)
+        if user:
+            result["username"] = user.name
+            result["display_name"] = user.display_name
+            log.info(f"成功获取用户 {target_id} 的基本信息: {user.name}")
+    except discord.NotFound:
+        result["errors"].append("User not found on Discord.")
+        log.warning(f"无法找到 ID 为 {target_id} 的用户。")
+        return result
+    except Exception as e:
+        error_msg = f"获取用户基本信息时发生错误: {str(e)}"
+        result["errors"].append(error_msg)
+        log.error(error_msg, exc_info=True)
+        return result
+
+    # --- 查询分支 ---
+
     # 1. 查询头像 (Avatar)
     if "avatar" in query_set:
         try:
-            user = await bot.fetch_user(target_id)
-            if user and user.display_avatar:
+            if user.display_avatar:
                 avatar_url = str(user.display_avatar.url)
                 result["profile"]["avatar_url"] = avatar_url
 
@@ -103,8 +134,6 @@ async def get_user_profile(
                 log.info(f"成功获取用户 {target_id} 的头像 URL 并下载了图片。")
             else:
                 result["errors"].append("User has no avatar.")
-        except discord.NotFound:
-            result["errors"].append("User not found on Discord for avatar query.")
         except httpx.HTTPStatusError as e:
             error_msg = f"下载头像时发生HTTP错误: {e}"
             result["errors"].append(error_msg)

@@ -119,7 +119,7 @@ class ToolConverter:
     # ==================== OpenAI 格式转换 ====================
 
     @staticmethod
-    def to_openai_tool(declaration: ToolDeclaration) -> Dict[str, Any]:
+    def to_openai_tool(declaration: Union[ToolDeclaration, Dict[str, Any]]) -> Dict[str, Any]:
         """
         将 ToolDeclaration 转换为 OpenAI Tool 格式
 
@@ -127,15 +127,18 @@ class ToolConverter:
         此方法主要用于向后兼容或特殊情况。
 
         Args:
-            declaration: 通用工具声明
+            declaration: 通用工具声明，或已经是 OpenAI 格式的 dict
 
         Returns:
             Dict: OpenAI 格式的工具
         """
+        # 如果已经是 dict（即已经转换过的 OpenAI 格式），直接返回
+        if isinstance(declaration, dict):
+            return declaration
         return declaration.to_openai_format()
 
     @staticmethod
-    def to_openai_tools(declarations: List[ToolDeclaration]) -> List[Dict[str, Any]]:
+    def to_openai_tools(declarations: List[Union[ToolDeclaration, Dict[str, Any]]]) -> List[Dict[str, Any]]:
         """
         批量转换为 OpenAI Tool 格式
 
@@ -143,7 +146,7 @@ class ToolConverter:
         此方法主要用于向后兼容或特殊情况。
 
         Args:
-            declarations: 通用工具声明列表
+            declarations: 通用工具声明列表，或已经是 OpenAI 格式的 dict 列表
 
         Returns:
             List[Dict]: OpenAI 格式的工具列表

@@ -185,7 +185,8 @@ class GuidanceBot(commands.Bot):
         # 设置机器人需要监听的事件
         intents = discord.Intents.default()
         intents.members = True  # 需要监听成员加入、角色变化
-        intents.messages = True  # 需要监听消息内容
+        intents.messages = True  # 需要接收消息事件（create/update/delete）
+        intents.message_content = True  # 需要读取消息正文内容（特权 intent）
         intents.reactions = True  # 需要监听反应事件
 
         # 解析 GUILD_ID 环境变量，支持用逗号分隔的多个 ID

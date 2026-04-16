@@ -107,6 +107,18 @@ class OpenAICompatibleProvider(BaseProvider):
         """检查服务是否可用"""
         return bool(self.api_key) and bool(self.base_url)
 
+    async def list_models(self) -> List[Dict[str, Any]]:
+        """调用 GET /models 获取端点支持的模型列表。"""
+        client = self._get_client()
+        response = await client.get("/models")
+        response.raise_for_status()
+        data = response.json()
+        if isinstance(data, dict) and "data" in data:
+            return data["data"]
+        if isinstance(data, list):
+            return data
+        return []
+
     async def generate(
         self,
         messages: List[Dict[str, Any]],
@@ -206,6 +218,9 @@ class OpenAICompatibleProvider(BaseProvider):
             return await self.generate(messages, config, tools, model_name)
 
         conversation_history = messages.copy()
+        # 累计多轮工具调用的 token 使用量
+        total_input_tokens = 0
+        total_output_tokens = 0
 
         try:
             for iteration in range(max_iterations):
@@ -221,8 +236,16 @@ class OpenAICompatibleProvider(BaseProvider):
                     model=model_name,
                 )
 
+                # 累计本轮的 token 使用量
+                total_input_tokens += result.input_tokens or 0
+                total_output_tokens += result.output_tokens or 0
+
                 # 检查是否有工具调用
                 if not result.has_tool_calls or not result.tool_calls:
+                    # 将累计的 token 使用量写入最终结果
+                    result.input_tokens = total_input_tokens
+                    result.output_tokens = total_output_tokens
+                    result.tokens_used = total_input_tokens + total_output_tokens
                     return result
 
                 # 执行工具调用
@@ -428,19 +451,31 @@ class OpenAICompatibleProvider(BaseProvider):
 
             # 4. 如果 content 是列表（OpenAI 多部分格式）
             if content is not None and isinstance(content, list):
-                # 提取文本内容
-                text_parts = []
+                openai_parts = []
                 for item in content:
                     if isinstance(item, str):
-                        text_parts.append(item)
-                    elif isinstance(item, dict) and item.get("type") == "text":
-                        text_parts.append(item.get("text", ""))
+                        openai_parts.append({"type": "text", "text": item})
+                    elif isinstance(item, dict):
+                        item_type = item.get("type")
+                        if item_type == "text":
+                            openai_parts.append(
+                                {"type": "text", "text": item.get("text", "")}
+                            )
+                        elif item_type == "image_url":
+                            # 保留 image_url，让支持视觉的模型能看到图片
+                            # 只传标准字段，去掉非标准的 source 字段避免 API 报错
+                            openai_parts.append(
+                                {
+                                    "type": "image_url",
+                                    "image_url": item["image_url"],
+                                }
+                            )
 
-                if text_parts:
+                if openai_parts:
                     converted_messages.append(
                         {
                             "role": openai_role,
-                            "content": "\n".join(text_parts),
+                            "content": openai_parts,
                         }
                     )
                 continue

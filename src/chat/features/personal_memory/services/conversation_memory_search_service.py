@@ -19,6 +19,7 @@ from src.database.database import AsyncSessionLocal
 from src.chat.services.embedding_factory import (
     get_embedding_service,
     get_embedding_column,
+    get_vector_mode,
     is_vector_enabled,
 )
 from src.chat.config import chat_config
@@ -57,12 +58,14 @@ class ConversationMemorySearchService:
         session,
         discord_id: str,
         query_text: str,
-        query_vector: List[float],
+        query_vector: Optional[List[float]],
         exclude_block_ids: Optional[List[int]] = None,
     ) -> List[Dict[str, Any]]:
         """
-        执行混合搜索（向量 + BM25）检索用户的对话块。
-        使用 RRF (Reciprocal Rank Fusion) 融合向量搜索和 BM25 搜索结果。
+        执行对话记忆搜索。
+
+        - local 模式：使用向量 + BM25 的混合搜索
+        - api 模式：回退为仅 BM25 搜索，避免依赖本地 embedding 列
 
         Args:
             session: 数据库会话
@@ -74,7 +77,9 @@ class ConversationMemorySearchService:
         Returns:
             检索结果列表
         """
+        vector_mode = get_vector_mode()
         embedding_col = await get_embedding_column()
+        use_vector_search = vector_mode != "none" and bool(embedding_col) and bool(query_vector)
         embedding_model = "Qwen" if embedding_col == "qwen_embedding" else "BGE"
 
         # 混合搜索配置
@@ -84,9 +89,10 @@ class ConversationMemorySearchService:
         final_k = self.config.get("retrieval_top_k", 3)
         max_vector_distance = self.config.get("max_vector_distance", 0.65)
 
+        search_mode = "混合搜索 (向量 + BM25)" if use_vector_search else "仅 BM25 搜索"
         log.info(
             f"[对话记忆搜索] 用户: {discord_id} | Embedding模型: {embedding_model} | "
-            f"搜索模式: 混合搜索 (向量 + BM25) | 向量列: {embedding_col} | "
+            f"搜索模式: {search_mode} | 向量列: {embedding_col} | "
             f"TOP_K_VECTOR: {top_k_vector} | TOP_K_FTS: {top_k_fts} | "
             f"RRF_K: {rrf_k} | FINAL_K: {final_k} | MAX_DISTANCE: {max_vector_distance} | "
             f"排除块: {exclude_block_ids}"
@@ -97,57 +103,86 @@ class ConversationMemorySearchService:
         if exclude_block_ids:
             exclude_clause = f"AND id NOT IN ({','.join(map(str, exclude_block_ids))})"
 
-        # 混合搜索 SQL
-        # 使用 RRF (Reciprocal Rank Fusion) 融合向量搜索和 BM25 搜索结果
-        # 参考论坛搜索的实现方式
-        sql_query = text(
-            f"""
-            WITH semantic_search AS (
+        if use_vector_search:
+            # 混合搜索 SQL
+            # 使用 RRF (Reciprocal Rank Fusion) 融合向量搜索和 BM25 搜索结果
+            # 参考论坛搜索的实现方式
+            sql_query = text(
+                f"""
+                WITH semantic_search AS (
+                    SELECT
+                        id,
+                        {embedding_col} <=> CAST(:query_vector AS halfvec) as vector_distance,
+                        RANK() OVER (ORDER BY {embedding_col} <=> CAST(:query_vector AS halfvec)) as rank
+                    FROM conversation.conversation_blocks
+                    WHERE discord_id = :discord_id
+                      AND {embedding_col} IS NOT NULL
+                      {exclude_clause}
+                    ORDER BY {embedding_col} <=> CAST(:query_vector AS halfvec)
+                    LIMIT :top_k_vector
+                ),
+                keyword_search AS (
+                    SELECT
+                        id,
+                        RANK() OVER (ORDER BY paradedb.score(id) DESC) as rank
+                    FROM conversation.conversation_blocks
+                    WHERE discord_id = :discord_id
+                      AND conversation_text @@@ :query_text
+                      {exclude_clause}
+                    LIMIT :top_k_fts
+                ),
+                fused_ranks AS (
+                    SELECT
+                        COALESCE(s.id, k.id) as id,
+                        s.vector_distance,
+                        (COALESCE(1.0 / (:rrf_k + s.rank), 0.0) + COALESCE(1.0 / (:rrf_k + k.rank), 0.0)) as rrf_score
+                    FROM semantic_search s
+                    FULL OUTER JOIN keyword_search k ON s.id = k.id
+                )
                 SELECT
-                    id,
-                    {embedding_col} <=> CAST(:query_vector AS halfvec) as vector_distance,
-                    RANK() OVER (ORDER BY {embedding_col} <=> CAST(:query_vector AS halfvec)) as rank
-                FROM conversation.conversation_blocks
-                WHERE discord_id = :discord_id
-                  AND {embedding_col} IS NOT NULL
-                  {exclude_clause}
-                ORDER BY {embedding_col} <=> CAST(:query_vector AS halfvec)
-                LIMIT :top_k_vector
-            ),
-            keyword_search AS (
-                SELECT
-                    id,
-                    RANK() OVER (ORDER BY paradedb.score(id) DESC) as rank
-                FROM conversation.conversation_blocks
-                WHERE discord_id = :discord_id
-                  AND conversation_text @@@ :query_text
-                  {exclude_clause}
-                LIMIT :top_k_fts
-            ),
-            fused_ranks AS (
-                SELECT
-                    COALESCE(s.id, k.id) as id,
-                    s.vector_distance,
-                    (COALESCE(1.0 / (:rrf_k + s.rank), 0.0) + COALESCE(1.0 / (:rrf_k + k.rank), 0.0)) as rrf_score
-                FROM semantic_search s
-                FULL OUTER JOIN keyword_search k ON s.id = k.id
+                    cb.id,
+                    cb.discord_id,
+                    cb.conversation_text,
+                    cb.start_time,
+                    cb.end_time,
+                    cb.message_count,
+                    fr.vector_distance,
+                    fr.rrf_score
+                FROM fused_ranks fr
+                JOIN conversation.conversation_blocks cb ON fr.id = cb.id
+                WHERE (fr.vector_distance IS NULL OR fr.vector_distance <= :max_vector_distance)
+                ORDER BY fr.rrf_score DESC
+                LIMIT :final_k;
+                """
             )
-            SELECT
-                cb.id,
-                cb.discord_id,
-                cb.conversation_text,
-                cb.start_time,
-                cb.end_time,
-                cb.message_count,
-                fr.vector_distance,
-                fr.rrf_score
-            FROM fused_ranks fr
-            JOIN conversation.conversation_blocks cb ON fr.id = cb.id
-            WHERE (fr.vector_distance IS NULL OR fr.vector_distance <= :max_vector_distance)
-            ORDER BY fr.rrf_score DESC
-            LIMIT :final_k;
-            """
-        )
+        else:
+            sql_query = text(
+                f"""
+                WITH keyword_search AS (
+                    SELECT
+                        id,
+                        RANK() OVER (ORDER BY paradedb.score(id) DESC) as rank
+                    FROM conversation.conversation_blocks
+                    WHERE discord_id = :discord_id
+                      AND conversation_text @@@ :query_text
+                      {exclude_clause}
+                    LIMIT :top_k_fts
+                )
+                SELECT
+                    cb.id,
+                    cb.discord_id,
+                    cb.conversation_text,
+                    cb.start_time,
+                    cb.end_time,
+                    cb.message_count,
+                    NULL as vector_distance,
+                    (1.0 / (:rrf_k + ks.rank)) as rrf_score
+                FROM keyword_search ks
+                JOIN conversation.conversation_blocks cb ON ks.id = cb.id
+                ORDER BY rrf_score DESC
+                LIMIT :final_k;
+                """
+            )
 
         try:
             result = await session.execute(
@@ -218,18 +253,18 @@ class ConversationMemorySearchService:
             log.debug("向量模式已禁用，跳过对话记忆搜索")
             return []
 
-        try:
-            # 生成查询嵌入
-            embedding_service = await get_embedding_service()
-            query_embedding = await embedding_service.generate_embedding(
-                text=query, task_type="retrieval_query"
-            )
-            if not query_embedding:
-                log.error("查询嵌入生成失败")
-                return []
-        except Exception as e:
-            log.error(f"生成查询嵌入时出错: {e}", exc_info=True)
-            return []
+        query_embedding: Optional[List[float]] = None
+        if get_vector_mode() != "none":
+            try:
+                # 只要启用了向量能力（api / local），就生成查询嵌入并保留混合检索框架
+                embedding_service = await get_embedding_service()
+                query_embedding = await embedding_service.generate_embedding(
+                    text=query, task_type="retrieval_query"
+                )
+                if not query_embedding:
+                    log.warning("查询嵌入生成失败，将回退为仅 BM25 搜索")
+            except Exception as e:
+                log.error(f"生成查询嵌入时出错: {e}", exc_info=True)
 
         search_results = []
         try:

@@ -122,6 +122,10 @@ class ToolService:
         self.bot = bot
         self.tool_map = tool_map
         self.tool_declarations = tool_declarations
+        # 暂存本次请求中工具生成的图片列表，元素为 (bytes, mime_type)
+        self.pending_images: list[tuple[bytes, str]] = []
+        # 已追加到 Gemini 对话历史的图片数量（防止多轮工具调用重复追加）
+        self._images_sent_to_model: int = 0
         log.info(
             f"ToolService 已使用 {len(tool_map)} 个工具进行初始化: {list(tool_map.keys())}"
         )
@@ -225,6 +229,8 @@ class ToolService:
         Returns:
             一个格式化为 FunctionResponse 的 Part 对象，其中包含工具的输出。
         """
+        import time as _time
+
         # 兼容 Gemini FunctionCall 对象和 OpenAI dict 格式
         if isinstance(tool_call, dict):
             tool_name = tool_call.get("name")
@@ -252,6 +258,7 @@ class ToolService:
 
         # --- 检查工具是否被禁用 ---
         # 1. 首先检查全局禁用状态
+        _t_perm_start = _time.monotonic()
         try:
             if await global_tool_settings_service.is_tool_disabled(tool_name):
                 log.info(f"工具 '{tool_name}' 已被全局禁用，拒绝执行。")
@@ -293,6 +300,9 @@ class ToolService:
                             )
             except Exception as e:
                 log.error(f"检查工具设置时出错: {e}", exc_info=True)
+        log.info(
+            f"[TIMING] 工具 '{tool_name}' 权限检查耗时: {_time.monotonic() - _t_perm_start:.3f}s"
+        )
         # --- 结束检查 ---
 
         try:
@@ -431,21 +441,24 @@ class ToolService:
 
             # 步骤 5: 根据工具返回的结果，构造相应的 Part
             if "image_data" in result and isinstance(result["image_data"], dict):
-                # 这是一个多模态（图片）结果
+                # 多模态（图片）结果：不放入对话历史，避免 base64 图片数据撑爆 token 限制
                 image_info = result["image_data"]
-                if log_detailed:
-                    log.info(
-                        f"检测到图片结果，MIME 类型: {image_info.get('mime_type')}"
-                    )
-                part = types.Part(
-                    inline_data=types.Blob(
-                        mime_type=image_info.get("mime_type", "image/png"),
-                        data=image_info.get("data", b""),
-                    )
+                image_bytes = image_info.get("data", b"")
+                mime_type = image_info.get("mime_type", "image/png")
+                if image_bytes:
+                    self.pending_images.append((image_bytes, mime_type))
+                    if log_detailed:
+                        log.info(
+                            f"检测到图片结果，已暂存 {len(image_bytes)} bytes "
+                            f"(MIME: {mime_type})，不放入对话历史。"
+                        )
+                # 给 Gemini 只返回简短文字确认，不含图片数据
+                return types.Part.from_function_response(
+                    name=tool_name,
+                    response={
+                        "result": f"图片已生成成功（{mime_type}，{len(image_bytes)} bytes），将直接发送给用户。"
+                    },
                 )
-                if log_detailed:
-                    log.info(f"已为 '{tool_name}' 构造包含图片的 Part。")
-                return part
             else:
                 # 这是一个标准的文本/JSON结果（包括错误信息）
                 part = types.Part.from_function_response(

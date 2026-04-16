@@ -22,6 +22,11 @@ alembic
 langchain-text-splitters
 numpy==1.26.4
 
+openai>=1.0.0
+
+# Web Search APIs
+exa-py
+
 # Web UI 依赖
 fastapi
 uvicorn

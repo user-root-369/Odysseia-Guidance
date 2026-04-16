@@ -693,6 +693,42 @@ class ChatSettingsService:
 
         return reset_model_to_original(model_name)
 
+    async def save_openai_compatible_config(
+        self,
+        url: str,
+        api_key: Optional[str],
+        name: str = "OpenAI 兼容",
+    ) -> None:
+        """
+        保存 OpenAI 兼容端点配置并热重载 Provider。
+        优先级：新值 > DB 已有值 > .env 默认值。
+        """
+        import os
+
+        await self.db_manager.set_global_setting("openai_compatible_url", url)
+        await self.db_manager.set_global_setting("openai_compatible_name", name)
+
+        if api_key:
+            await self.db_manager.set_global_setting(
+                "openai_compatible_api_key", api_key
+            )
+        else:
+            api_key = await self.db_manager.get_global_setting(
+                "openai_compatible_api_key"
+            ) or os.getenv("OPENAI_COMPATIBLE_API_KEY", "")
+
+        os.environ["OPENAI_COMPATIBLE_URL"] = url
+        if api_key:
+            os.environ["OPENAI_COMPATIBLE_API_KEY"] = api_key
+
+        try:
+            from src.chat.services.ai.service import ai_service
+
+            if hasattr(ai_service, "reload_providers"):
+                await ai_service.reload_providers()
+        except Exception:
+            pass
+
 
 # 单例实例
 chat_settings_service = ChatSettingsService()

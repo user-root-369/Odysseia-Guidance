@@ -191,6 +191,16 @@ class ChatSettingsView(View):
             )
         )
 
+        # 第 4 行：OpenAI 兼容端点设置
+        self.add_item(
+            Button(
+                label="🔌 OpenAI兼容端点",
+                style=ButtonStyle.secondary,
+                custom_id="api_endpoint_settings",
+                row=4,
+            )
+        )
+
     async def _update_view(self, interaction: Interaction):
         """通过编辑附加的消息来刷新视图。"""
         await self._initialize()  # 重新获取所有数据，包括派系
@@ -219,6 +229,8 @@ class ChatSettingsView(View):
             await self.on_global_tools_settings(interaction)
         elif custom_id == "model_params_settings":
             await self.on_model_params_settings(interaction)
+        elif custom_id == "api_endpoint_settings":
+            await self.on_api_endpoint_settings(interaction)
 
         return True
 
@@ -301,27 +313,25 @@ class ChatSettingsView(View):
         await self._update_view(interaction)
 
     async def on_ai_model_settings(self, interaction: Interaction):
-        """打开AI模型设置视图。"""
-        # 获取当前模型和 Provider
+        """打开AI模型设置视图。先 defer 再拉取，避免模型发现超过 3s 交互超时。"""
+        await interaction.response.defer(ephemeral=True)
+
         (
             current_provider,
             current_model,
         ) = await self.service.get_current_ai_model_with_provider()
 
-        # 创建新的选择视图
-        view = AIModelSettingsView(
+        # 异步工厂：对所有 Provider 执行模型发现（含远端 /models 拉取）
+        view = await AIModelSettingsView.create(
             current_provider=current_provider,
             current_model=current_model,
         )
 
-        # 发送视图
         embed = discord.Embed(
             title="🤖 AI 模型设置",
             description="请选择供应商和模型",
             color=discord.Color.blue(),
         )
-
-        # 显示当前设置
         if current_provider and current_model:
             embed.add_field(
                 name="当前设置",
@@ -329,22 +339,17 @@ class ChatSettingsView(View):
                 inline=False,
             )
 
-        await interaction.response.send_message(
-            embed=embed,
-            view=view,
-            ephemeral=True,
-        )
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
         # 等待视图完成
         await view.wait()
 
-        # 如果用户确认了选择，保存设置
+        # 保存设置（始终带 provider 前缀，确保动态模型能正确路由）
         full_model_id = view.get_selected_full_model_id()
         if full_model_id:
             provider, model = AIModelSettingsView.parse_full_model_id(full_model_id)
             if provider and model:
-                # 直接存模型名，不带 provider 前缀
-                await self.service.set_ai_model(model)
+                await self.service.set_ai_model_with_provider(provider, model)
 
     async def on_show_token_usage(self, interaction: Interaction):
         """显示今天的 Token 使用情况。"""
@@ -440,3 +445,21 @@ class ChatSettingsView(View):
             content=None, embed=embed, view=model_params_view
         )
         self.stop()
+
+    async def on_api_endpoint_settings(self, interaction: Interaction):
+        """打开 OpenAI 兼容端点配置 Modal。预填优先级：DB > .env。"""
+        import os
+        from src.chat.features.chat_settings.ui.api_endpoint_settings_modal import (
+            ApiEndpointSettingsModal,
+        )
+
+        current_url = await self.service.db_manager.get_global_setting(
+            "openai_compatible_url"
+        ) or os.getenv("OPENAI_COMPATIBLE_URL", "")
+        current_name = await self.service.db_manager.get_global_setting(
+            "openai_compatible_name"
+        ) or os.getenv("OPENAI_COMPATIBLE_NAME", "")
+
+        await interaction.response.send_modal(
+            ApiEndpointSettingsModal(current_url=current_url, current_name=current_name)
+        )

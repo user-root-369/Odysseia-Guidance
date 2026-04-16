@@ -187,11 +187,7 @@ def get_provider_configs() -> Dict[str, ProviderConfig]:
             type="openai_compatible",
             api_key=openai_key,
             base_url=openai_url,
-            models=[
-                "gpt-4",
-                "gpt-4o",
-                "claude-3-opus",
-            ],
+            models=[],  # 不传静态列表，保留类级别 supported_models 作 fallback
             default_model="gpt-4o",
         )
 

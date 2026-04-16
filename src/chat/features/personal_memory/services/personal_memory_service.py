@@ -10,6 +10,7 @@ from src.chat.config.chat_config import (
     SUMMARY_MODEL,
     GEMINI_SUMMARY_GEN_CONFIG,
     CONVERSATION_MEMORY_CONFIG,
+    PERSONAL_MEMORY_CONFIG,
 )
 from src.chat.services.ai.service import ai_service
 from src.chat.services.ai.providers.base import GenerationConfig
@@ -157,8 +158,25 @@ class PersonalMemoryService:
                 }
 
                 current_history = getattr(profile, "history", [])
-                new_history = list(current_history or [])
+                # 确保 history 是列表类型，防止 JSON 解析失败时返回字符串或其他类型
+                if not isinstance(current_history, list):
+                    log.warning(
+                        f"用户 {user_id} 的 history 字段类型异常 ({type(current_history).__name__})，已重置为空列表。"
+                    )
+                    current_history = []
+
+                new_history = list(current_history)
                 new_history.extend([new_turn, new_model_turn])
+
+                # 限制 history 大小，只保留最近的 N 轮对话（每轮 = user + model）
+                max_turns = PERSONAL_MEMORY_CONFIG.get("max_history_turns", 10)
+                max_items = max_turns * 2  # user + model = 2 items per turn
+                if len(new_history) > max_items:
+                    new_history = new_history[-max_items:]
+                    log.debug(
+                        f"用户 {user_id} 的 history 已截断至最近 {max_turns} 轮对话。"
+                    )
+
                 setattr(profile, "history", new_history)
 
                 log.debug(f"用户 {user_id} 的对话历史更新为: {len(new_history)} 条")
