@@ -159,6 +159,50 @@ class AIService:
             log.warning(f"未知的 Provider 类型: {config.type}")
             return None
 
+    async def reload_providers(self) -> None:
+        """
+        热重载 Provider 配置，重新读取当前环境变量并重建相应 Provider 实例。
+
+        主要用于聊天面板动态修改 OpenAI 兼容端点后立即生效，无需重启 bot。
+        目前只重建 openai_compatible 类型的 Provider。
+        """
+        from .config.providers import get_provider_configs
+
+        provider_configs = get_provider_configs()
+        reloaded = []
+
+        for provider_name, config in provider_configs.items():
+            if config.type != "openai_compatible":
+                continue  # 仅热重载 OpenAI 兼容端点
+
+            if not config.is_available():
+                # 如果新配置不可用，移除旧 provider
+                if provider_name in self._providers:
+                    del self._providers[provider_name]
+                    log.info(f"Provider '{provider_name}' 配置不可用，已移除")
+                continue
+
+            try:
+                provider = self._create_provider(config)
+                if provider:
+                    self._providers[provider_name] = provider
+                    # 同步模型映射
+                    for model_name in config.models:
+                        self._model_to_provider[model_name] = config.name
+                    reloaded.append(provider_name)
+                    log.info(
+                        f"Provider '{provider_name}' 热重载成功，URL: {config.base_url}"
+                    )
+            except Exception as e:
+                log.error(
+                    f"热重载 Provider '{provider_name}' 时发生错误: {e}", exc_info=True
+                )
+
+        if reloaded:
+            log.info(f"Provider 热重载完成，已更新: {reloaded}")
+        else:
+            log.warning("reload_providers 调用完成，但没有任何 openai_compatible Provider 被更新")
+
     def set_bot(self, bot: Any):
         """
         设置 Discord Bot 实例

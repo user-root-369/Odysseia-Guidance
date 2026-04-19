@@ -12,6 +12,7 @@ from collections import Counter
 from pydantic import BaseModel
 
 from src.chat.utils.database import chat_db_manager
+from src.chat.utils.discord_message_utils import send_via_dm_in_chunks
 from src.chat.features.personal_memory.services.personal_memory_service import (
     personal_memory_service,
 )
@@ -126,7 +127,7 @@ async def get_yearly_summary(**kwargs) -> Dict[str, Any]:
                     "message": "在为你撰写总结时，我的灵感突然消失了...",
                 }
 
-            await user.send(result.content)
+            await send_via_dm_in_chunks(user, result.content)
             log.info(
                 f"已成功为 Tier {tier} 用户 {user.name} ({user_id}) 发送年度总结长文。"
             )

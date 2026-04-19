@@ -151,7 +151,8 @@ def extract_function_schema(
 
     这个函数会：
     1. 解析函数签名的类型注解
-    2. 如果参数是 Pydantic 模型，提取其 JSON Schema
+    2. 如果参数是 Pydantic 模型，**展平**其字段到顶层 properties
+       （OpenAI 兼容 LLM 传入的是扁平参数，而非嵌套对象）
     3. 生成标准 JSON Schema 格式的参数定义
 
     Args:
@@ -177,15 +178,32 @@ def extract_function_schema(
 
         # 获取参数类型
         param_type = param.annotation
-        param_schema = {}
 
-        # 检查是否有对应的 Pydantic 模型
+        # 检查是否有对应的 Pydantic 模型（显式传入）
         if param_name in param_models:
-            # 使用 Pydantic 模型生成 schema
             model_class = param_models[param_name]
-            param_schema = _pydantic_model_to_param_schema(model_class)
-        elif param_type != inspect.Parameter.empty:
-            # 从类型注解推断 schema
+            _flatten_pydantic_model_into_schema(model_class, parameters_schema)
+            continue
+
+        # 检查参数类型注解是否为 Pydantic 模型
+        if (
+            param_type != inspect.Parameter.empty
+            and isinstance(param_type, type)
+            and issubclass(param_type, BaseModel)
+        ):
+            # 展平 Pydantic 模型字段到顶层 properties
+            # 这样 OpenAI 兼容 LLM 可以直接传入 query、num_results 等字段，
+            # 而不需要传入嵌套的 params 对象。
+            # tool_service._convert_dict_to_pydantic 负责在执行时重新组装回 Pydantic 实例。
+            _flatten_pydantic_model_into_schema(param_type, parameters_schema)
+            log.debug(
+                f"已将参数 '{param_name}' ({param_type.__name__}) 的字段展平到顶层 schema"
+            )
+            continue
+
+        # 普通参数：从类型注解推断 schema
+        param_schema: Dict[str, Any] = {}
+        if param_type != inspect.Parameter.empty:
             param_schema = _type_to_schema(param_type)
 
         # 如果有默认值，标记为可选
@@ -203,6 +221,53 @@ def extract_function_schema(
         "description": function_description or _extract_description(func),
         "parameters": parameters_schema,
     }
+
+
+def _flatten_pydantic_model_into_schema(
+    model_class: Type[BaseModel],
+    parameters_schema: Dict[str, Any],
+) -> None:
+    """
+    将 Pydantic 模型的字段展平到 parameters_schema 的顶层 properties 中。
+
+    这解决了 OpenAI 兼容 LLM 无法传入嵌套 Pydantic 对象的问题：
+    - LLM 看到的 schema 是展平的顶层字段（query, num_results 等）
+    - tool_service._convert_dict_to_pydantic 会在执行时自动重新组装为 Pydantic 实例
+
+    Args:
+        model_class: Pydantic 模型类（如 ExaSearchParams）
+        parameters_schema: 目标 schema 字典，将直接修改其 properties 和 required
+    """
+    json_schema = model_class.model_json_schema()
+    # 解析 $defs（Pydantic v2 的 $ref 展开）
+    defs = json_schema.get("$defs", {})
+
+    for field_name, field_info in model_class.model_fields.items():
+        # 从 JSON schema 中获取字段 schema
+        field_json_schema = json_schema.get("properties", {}).get(field_name, {})
+        # 解析 $ref
+        if "$ref" in field_json_schema:
+            ref_name = field_json_schema["$ref"].split("/")[-1]
+            field_json_schema = defs.get(ref_name, field_json_schema)
+
+        # 转换为 Gemini 兼容格式
+        field_gemini_schema = convert_to_gemini_schema(field_json_schema)
+
+        # 保留 description（优先从 field_info 取，再从 json_schema 取）
+        if field_info.description:
+            field_gemini_schema["description"] = field_info.description
+        elif "description" not in field_gemini_schema and hasattr(field_info, "metadata"):
+            for meta in getattr(field_info, "metadata", []):
+                if hasattr(meta, "description"):
+                    field_gemini_schema["description"] = meta.description
+                    break
+
+        parameters_schema["properties"][field_name] = field_gemini_schema
+
+        # 判断是否必填
+        is_required = field_info.is_required()
+        if is_required and field_name not in parameters_schema["required"]:
+            parameters_schema["required"].append(field_name)
 
 
 def _pydantic_model_to_param_schema(model_class: Type[BaseModel]) -> dict:

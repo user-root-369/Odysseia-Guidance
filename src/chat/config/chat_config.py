@@ -212,7 +212,8 @@ FORUM_RAG_CONFIG = {
 
 # --- 消息设置 ---
 MESSAGE_SETTINGS = {
-    "DM_THRESHOLD": 2000,  # 当消息长度超过此值时，通过私信发送
+    "SINGLE_MESSAGE_LIMIT": 1900,  # 单条消息的安全上限，给 mention 和边界情况留余量
+    "CHANNEL_DM_THRESHOLD": 4000,  # 超过此值时，聊天回复改为私信分段发送
 }
 
 GEMINI_TEXT_GEN_CONFIG = {
@@ -272,7 +273,7 @@ API_RETRY_CONFIG = {
 # --- Provider 故障转移重试配置 ---
 # 当 Provider 请求失败时，在执行故障转移之前先重试的配置
 PROVIDER_RETRY_CONFIG = {
-    "MAX_RETRIES": 10,  # 故障转移前对同一 Provider 的最大重试次数（不含首次请求）
+    "MAX_RETRIES": 1,  # 故障转移前对同一 Provider 的最大重试次数（不含首次请求）
     "RETRY_DELAY_SECONDS": 1,  # 每次重试之间的延迟（秒）
 }
 

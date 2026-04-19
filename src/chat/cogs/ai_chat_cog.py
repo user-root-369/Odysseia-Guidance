@@ -5,7 +5,6 @@ import discord
 from discord.ext import commands
 from typing import Optional
 import logging
-import re
 
 # 导入新的 Service
 from src.chat.services.chat_service import chat_service, ChatResult
@@ -19,6 +18,12 @@ from src.chat.utils.database import chat_db_manager
 from src.chat.config.chat_config import CHAT_ENABLED, MESSAGE_SETTINGS
 from src.chat.config import chat_config
 from src.chat.features.odysseia_coin.service.coin_service import coin_service
+from src.chat.utils.discord_message_utils import (
+    get_text_length_without_emojis,
+    send_split_message,
+    send_via_dm_in_chunks,
+    should_send_via_dm,
+)
 
 log = logging.getLogger(__name__)
 
@@ -30,13 +35,6 @@ class AIChatCog(commands.Cog):
         self.bot = bot
         self._message_locks: dict[int, asyncio.Lock] = {}
         # 服务实例的注入已由 main.py 统一处理，此处不再需要
-
-    def _get_text_length_without_emojis(self, text: str) -> int:
-        """计算移除Discord自定义表情后的文本长度。"""
-        # 匹配 <a:name:id> 或 <:name:id> 格式的表情
-        emoji_pattern = r"<a?:.+?:\d+>"
-        text_without_emojis = re.sub(emoji_pattern, "", text)
-        return len(text_without_emojis)
 
     async def _safe_reply(
         self,
@@ -67,6 +65,22 @@ class AIChatCog(commands.Cog):
                 fallback_content,
                 files=files or None,
             )
+
+    async def _send_channel_response(
+        self,
+        message: discord.Message,
+        content: str,
+        *,
+        files: Optional[list[discord.File]] = None,
+        mention_author: bool = True,
+    ) -> None:
+        await send_split_message(
+            lambda chunk, **kwargs: self._safe_reply(message, chunk, **kwargs),
+            lambda chunk, **_: message.channel.send(chunk),
+            content,
+            files=files,
+            mention_author=mention_author,
+        )
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -148,21 +162,12 @@ class AIChatCog(commands.Cog):
                             message.channel.id in chat_config.UNRESTRICTED_CHANNEL_IDS
                             or isinstance(message.channel, discord.Thread)
                         )
-                        if is_unrestricted:
-                            if response_files:
-                                await message.channel.send(files=response_files)
-                            await self._safe_reply(
-                                message,
-                                response_text,
-                                mention_author=True,
-                            )
-                            return
+                        should_use_dm = not is_unrestricted and should_send_via_dm(
+                            response_text,
+                            MESSAGE_SETTINGS["CHANNEL_DM_THRESHOLD"],
+                        )
 
-                        # 3. 如果以上都不是，则检查是否为需要发送私信的普通长消息
-                        if (
-                            self._get_text_length_without_emojis(response_text)
-                            > MESSAGE_SETTINGS["DM_THRESHOLD"]
-                        ):
+                        if should_use_dm:
                             try:
                                 channel_mention = (
                                     message.channel.mention
@@ -173,9 +178,11 @@ class AIChatCog(commands.Cog):
                                     else "你们的私信"
                                 )
 
-                                await message.author.send(
-                                    f"刚刚在 {channel_mention} 频道里，你想听我说的话有点多，在这里悄悄告诉你哦：\n\n{response_text}",
+                                await send_via_dm_in_chunks(
+                                    message.author,
+                                    response_text,
                                     files=response_files or None,
+                                    prefix=f"刚刚在 {channel_mention} 频道里，你想听我说的话有点多，在这里悄悄告诉你哦：",
                                 )
                                 log.info(
                                     f"回复因过长已通过私信发送给 {message.author.display_name}"
@@ -184,21 +191,19 @@ class AIChatCog(commands.Cog):
                                 log.warning(
                                     f"无法通过私信发送给 {message.author.display_name}，将在原频道回复提示信息。"
                                 )
-                                if response_files:
-                                    await message.channel.send(files=response_files)
-                                await self._safe_reply(
+                                await self._send_channel_response(
                                     message,
                                     "字太多啦，我不要刷屏。你的私信又关了，我就不给你讲啦！",
+                                    files=response_files,
                                     mention_author=True,
                                 )
                             return
 
-                        # 4. 默认情况：先发图片，再在频道回复短消息
-                        if response_files:
-                            await message.channel.send(files=response_files)
-                        await self._safe_reply(
+                        # 4. 默认情况：在当前上下文分段发送
+                        await self._send_channel_response(
                             message,
                             response_text,
+                            files=response_files,
                             mention_author=True,
                         )
 

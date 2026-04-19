@@ -724,10 +724,9 @@ class ChatSettingsService:
         try:
             from src.chat.services.ai.service import ai_service
 
-            if hasattr(ai_service, "reload_providers"):
-                await ai_service.reload_providers()
-        except Exception:
-            pass
+            await ai_service.reload_providers()
+        except Exception as e:
+            log.warning(f"热重载 OpenAI Compatible Provider 失败: {e}", exc_info=True)
 
 
 # 单例实例

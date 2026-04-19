@@ -80,18 +80,48 @@ def _convert_dict_to_pydantic(
                             f"转换参数 '{param_name}' 到 {param_annotation.__name__} 失败: {e}"
                         )
             # 情况2: 参数不存在于 tool_args 中，但函数签名要求该参数
-            # 如果 Pydantic 模型的所有字段都有默认值，则创建默认实例
+            # OpenAI 兼容 LLM 会以扁平化 JSON 传参（如 {"query": "..."} 而非 {"params": {"query": "..."}}），
+            # 因此需要先尝试从 tool_args 中收集 Pydantic 模型的已知字段来构建实例。
             elif param.default is inspect.Parameter.empty:
-                # 参数没有默认值，需要创建 Pydantic 模型实例
-                try:
-                    tool_args[param_name] = param_annotation()
-                    log.debug(
-                        f"自动创建默认实例: {param_name} -> {param_annotation.__name__}()"
-                    )
-                except Exception as e:
-                    log.warning(
-                        f"创建参数 '{param_name}' 的默认 {param_annotation.__name__} 实例失败: {e}"
-                    )
+                # 先尝试从 tool_args 的扁平字段中收集该 Pydantic 模型的已知字段来构建实例
+                model_fields = set(param_annotation.model_fields.keys())
+                flat_kwargs = {
+                    k: tool_args.pop(k)
+                    for k in list(tool_args.keys())
+                    if k in model_fields
+                }
+                if flat_kwargs:
+                    try:
+                        tool_args[param_name] = param_annotation(**flat_kwargs)
+                        log.debug(
+                            f"从扁平参数构建: {param_name} -> {param_annotation.__name__}({list(flat_kwargs.keys())})"
+                        )
+                    except Exception as e:
+                        log.warning(
+                            f"从扁平参数构建 '{param_name}' ({param_annotation.__name__}) 失败: {e}"
+                        )
+                        # 回滚：将字段放回 tool_args 以避免数据丢失
+                        tool_args.update(flat_kwargs)
+                        # 抛出 TypeError，让调用方（openai_provider）知道这是参数错误，应终止重试
+                        raise TypeError(
+                            f"工具参数 '{param_name}' ({param_annotation.__name__}) 构建失败: {e}"
+                        )
+                else:
+                    # 无扁平字段可用，尝试无参构建默认实例（适用于所有字段都有默认值的模型）
+                    try:
+                        tool_args[param_name] = param_annotation()
+                        log.debug(
+                            f"自动创建默认实例: {param_name} -> {param_annotation.__name__}()"
+                        )
+                    except Exception as e:
+                        # 无法构建必填参数的 Pydantic 实例，抛出 TypeError 终止重试
+                        log.warning(
+                            f"创建参数 '{param_name}' 的默认 {param_annotation.__name__} 实例失败（LLM 未传入必要字段）: {e}"
+                        )
+                        raise TypeError(
+                            f"工具 '{tool_function.__name__}' 缺少必要参数 '{param_name}' "
+                            f"({param_annotation.__name__})，LLM 未传入所需字段: {e}"
+                        )
 
     return tool_args
 
@@ -469,6 +499,14 @@ class ToolService:
                     log.info(f"已为 '{tool_name}' 构造标准的 FunctionResponse Part。")
                 return part
 
+        except TypeError as e:
+            # TypeError 通常是参数签名不匹配（如 Pydantic 模型字段缺失）
+            # 这是系统级错误，LLM 重试也无法修复，直接重新抛出让上层处理
+            log.error(
+                f"执行工具 '{tool_name}' 时发生参数类型错误（重新抛出，不重试）: {e}",
+                exc_info=True,
+            )
+            raise
         except Exception as e:
             log.error(f"执行工具 '{tool_name}' 时发生意外错误。", exc_info=True)
             return types.Part.from_function_response(

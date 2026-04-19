@@ -272,6 +272,7 @@ class DeepSeekProvider(BaseProvider):
                 conversation_history.append(assistant_message)
 
                 # 执行工具并添加结果
+                has_fatal_error = False
                 for call in tool_calls_list:
                     try:
                         tool_result = await tool_executor(call, **kwargs)
@@ -283,6 +284,21 @@ class DeepSeekProvider(BaseProvider):
                             and "error" in tool_result,
                         )
                         conversation_history.append(tool_message)
+                    except TypeError as e:
+                        # TypeError 通常意味着参数签名不匹配，LLM 重试也无法修复
+                        log.error(
+                            f"执行工具 {call['name']} 时发生参数类型错误（不重试）: {e}",
+                            exc_info=True,
+                        )
+                        has_fatal_error = True
+                        tool_message = ToolConverter.tool_result_to_openai_message(
+                            tool_call_id=call["id"],
+                            tool_name=call["name"],
+                            result={"error": f"工具调用参数错误: {e}"},
+                            is_error=True,
+                        )
+                        conversation_history.append(tool_message)
+                        break
                     except Exception as e:
                         log.error(f"执行工具 {call['name']} 失败: {e}")
                         tool_message = ToolConverter.tool_result_to_openai_message(
@@ -292,6 +308,17 @@ class DeepSeekProvider(BaseProvider):
                             is_error=True,
                         )
                         conversation_history.append(tool_message)
+
+                if has_fatal_error:
+                    log.warning("工具调用发生参数错误，终止工具调用循环，不再重试")
+                    return GenerationResult(
+                        content="抱歉，工具调用时发生了参数错误，请稍后再试。",
+                        model_used=model_name,
+                        finish_reason=FinishReason.ERROR,
+                        input_tokens=total_input_tokens,
+                        output_tokens=total_output_tokens,
+                        tokens_used=total_input_tokens + total_output_tokens,
+                    )
 
             # 达到最大迭代次数
             log.warning(f"DeepSeek 达到最大工具调用迭代次数 {max_iterations}")
