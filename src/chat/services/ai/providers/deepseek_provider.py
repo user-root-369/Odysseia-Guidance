@@ -677,6 +677,21 @@ class DeepSeekProvider(BaseProvider):
         thinking_content = None
         if "reasoning_content" in message:
             thinking_content = message["reasoning_content"]
+            full_log_limit = 5000
+            preview_limit = 1500
+            if len(thinking_content) <= full_log_limit:
+                log.info(
+                    "模型思考过程长度=%s\n模型思考过程全文:\n%s",
+                    len(thinking_content),
+                    thinking_content,
+                )
+            else:
+                log.info(
+                    "模型思考过程长度=%s\n模型思考过程预览:\n%s...",
+                    len(thinking_content),
+                    thinking_content[:preview_limit],
+                )
+                log.debug("模型思考过程全文:\n%s", thinking_content)
 
         # 确定结束原因
         finish_reason_str = choice.get("finish_reason", "stop")

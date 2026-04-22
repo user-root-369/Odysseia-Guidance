@@ -47,7 +47,7 @@ class OpenAICompatibleProvider(BaseProvider):
     ]
     supports_vision = True
     supports_tools = True
-    supports_thinking = False
+    supports_thinking = True
 
     def __init__(
         self,
@@ -312,9 +312,7 @@ class OpenAICompatibleProvider(BaseProvider):
                         conversation_history.append(tool_message)
 
                 if has_fatal_error:
-                    log.warning(
-                        f"工具调用发生参数错误，终止工具调用循环，不再重试"
-                    )
+                    log.warning(f"工具调用发生参数错误，终止工具调用循环，不再重试")
                     return GenerationResult(
                         content="抱歉，工具调用时发生了参数错误，请稍后再试。",
                         model_used=model_name,
@@ -680,11 +678,61 @@ class OpenAICompatibleProvider(BaseProvider):
         if config.response_format:
             body["response_format"] = config.response_format
 
+        # 兼容 OpenAI reasoning 系列与部分第三方兼容端点的思维参数。
+        if config.thinking_budget_tokens is not None:
+            body["reasoning_effort"] = "high"
+            body["reasoning"] = {
+                "effort": "high",
+                "max_completion_tokens": config.thinking_budget_tokens,
+            }
+
         # 添加工具
         if tools:
             body["tools"] = ToolConverter.to_openai_tools(tools)
 
         return body
+
+    def _extract_thinking_content(self, message: Dict[str, Any]) -> Optional[str]:
+        """兼容多种 OpenAI 风格返回中的 reasoning/thinking 字段。"""
+        direct_candidates = [
+            message.get("reasoning_content"),
+            message.get("reasoning"),
+            message.get("thinking"),
+        ]
+        for candidate in direct_candidates:
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate
+
+        content = message.get("content")
+        if isinstance(content, list):
+            reasoning_parts = []
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+
+                item_type = item.get("type")
+                if item_type in {
+                    "reasoning",
+                    "thinking",
+                    "reasoning_text",
+                    "thinking_text",
+                }:
+                    text = (
+                        item.get("text") or item.get("content") or item.get("summary")
+                    )
+                    if isinstance(text, str) and text.strip():
+                        reasoning_parts.append(text)
+                    elif isinstance(text, list):
+                        for part in text:
+                            if isinstance(part, dict):
+                                part_text = part.get("text")
+                                if isinstance(part_text, str) and part_text.strip():
+                                    reasoning_parts.append(part_text)
+
+            if reasoning_parts:
+                return "\n".join(reasoning_parts)
+
+        return None
 
     def _process_response(
         self, response_data: Dict[str, Any], model_name: str
@@ -710,6 +758,24 @@ class OpenAICompatibleProvider(BaseProvider):
         choice = choices[0]
         message = choice.get("message", {})
         content = message.get("content", "")
+
+        thinking_content = self._extract_thinking_content(message)
+        if thinking_content:
+            full_log_limit = 5000
+            preview_limit = 1500
+            if len(thinking_content) <= full_log_limit:
+                log.info(
+                    "模型思考过程长度=%s\n模型思考过程全文:\n%s",
+                    len(thinking_content),
+                    thinking_content,
+                )
+            else:
+                log.info(
+                    "模型思考过程长度=%s\n模型思考过程预览:\n%s...",
+                    len(thinking_content),
+                    thinking_content[:preview_limit],
+                )
+                log.debug("模型思考过程全文:\n%s", thinking_content)
 
         # 确定结束原因
         finish_reason_str = choice.get("finish_reason", "stop")
@@ -742,6 +808,7 @@ class OpenAICompatibleProvider(BaseProvider):
             output_tokens=output_tokens,
             finish_reason=finish_reason,
             tool_calls=tool_calls,
+            thinking_content=thinking_content,
             raw_response=response_data,
         )
 

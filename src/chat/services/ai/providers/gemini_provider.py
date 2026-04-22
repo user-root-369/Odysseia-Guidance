@@ -386,8 +386,12 @@ class GeminiProvider(BaseProvider):
 
                 # 累计本轮的 token 使用量
                 if response.usage_metadata:
-                    total_input_tokens += response.usage_metadata.prompt_token_count or 0
-                    total_output_tokens += response.usage_metadata.candidates_token_count or 0
+                    total_input_tokens += (
+                        response.usage_metadata.prompt_token_count or 0
+                    )
+                    total_output_tokens += (
+                        response.usage_metadata.candidates_token_count or 0
+                    )
 
                 # 检查思考链
                 if response.candidates and response.candidates[0].content.parts:
@@ -401,7 +405,21 @@ class GeminiProvider(BaseProvider):
                         # 如果是思考部分，提取文本
                         if is_thought:
                             thinking_content = part.text
-                            log.info(f"模型思考过程: {thinking_content[:200]}...")
+                            full_log_limit = 5000
+                            preview_limit = 1500
+                            if len(thinking_content) <= full_log_limit:
+                                log.info(
+                                    "模型思考过程长度=%s\n模型思考过程全文:\n%s",
+                                    len(thinking_content),
+                                    thinking_content,
+                                )
+                            else:
+                                log.info(
+                                    "模型思考过程长度=%s\n模型思考过程预览:\n%s...",
+                                    len(thinking_content),
+                                    thinking_content[:preview_limit],
+                                )
+                                log.debug("模型思考过程全文:\n%s", thinking_content)
                         else:
                             log.debug(
                                 f"Part {idx}: 不是思考部分, text={part.text[:50] if hasattr(part, 'text') and part.text else 'N/A'}..."
